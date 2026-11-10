@@ -13,3 +13,7 @@ output "replicas" {
 output "imagen" {
   value = kubernetes_deployment_v1.app.spec[0].template[0].spec[0].container[0].image
 }
+
+output "logs" {
+  value = "kubectl -n ${kubernetes_namespace_v1.this.metadata[0].name} logs -l app=contador -f --prefix"
+}

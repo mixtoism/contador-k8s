@@ -1,34 +1,35 @@
 #!/usr/bin/env bash
-# Terraform en contenedor. Cada entorno es un workspace con su .tfvars:
-#   scripts/tf.sh dev-kube|prod-kube <comando>              terraform/      (clúster k3s local)
-#   scripts/tf.sh dev-lambda|prod-lambda <comando>          terraform/aws/  (AWS de verdad)
-#   scripts/tf.sh dev-beanstalk|prod-beanstalk <comando>    terraform/aws/  (AWS de verdad)
-# Sin entorno, para fmt, validate y test (mock):
-#   scripts/tf.sh kube|aws <comando>
+# Terraform en contenedor, siempre sobre terraform/ (un solo Terraform para todo).
+#
+#   scripts/tf.sh <entorno> <comando> [args]   entorno = dev|prod - kube|beanstalk|lambda
+#   scripts/tf.sh <comando> [args]             sin entorno: fmt, validate, test (mock)…
+#
+# Con entorno, cada uno es un workspace (estado propio) y a plan/apply/destroy se les
+# pasa entornos/<entorno>.tfvars, donde está plataforma = "...". Equivale a:
+#   terraform workspace select dev-beanstalk
+#   terraform apply -var-file=entornos/dev-beanstalk.tfvars
 set -euo pipefail
 source "$(dirname "$0")/comun.sh"
 
-destino=${1:?uso: $0 <entorno|kube|aws> <comando> [args...]}; shift
+entorno=""
+case "${1:?uso: $0 [entorno] <comando> [args...]}" in
+  *-kube|*-beanstalk|*-lambda) entorno=$1; shift ;;
+esac
 cmd=${1:?falta el comando de terraform}; shift
 
-case "$destino" in
-  kube) dir=/w/terraform ;;
-  aws) dir=/w/terraform/aws ;;
-  dev-kube|prod-kube) dir=/w/terraform ;;
-  dev-lambda|prod-lambda|dev-beanstalk|prod-beanstalk) dir=/w/terraform/aws ;;
-  *) echo "Entorno desconocido: $destino" >&2; exit 1 ;;
-esac
-
 vars=() extra=()
-if [[ "$destino" == *-* ]]; then
-  vars=(-e TF_WORKSPACE="$destino")
-  case "$cmd" in plan|apply|destroy) extra=(-var-file="$destino.tfvars") ;; esac
+if [ -n "$entorno" ]; then
+  if [ ! -f "$RAIZ/terraform/entornos/$entorno.tfvars" ]; then
+    echo "Entorno desconocido: $entorno (mira terraform/entornos/)" >&2; exit 1
+  fi
+  vars=(-e TF_WORKSPACE="$entorno")
+  case "$cmd" in plan|apply|destroy) extra=(-var-file="entornos/$entorno.tfvars") ;; esac
 fi
 
-if [ "$dir" = /w/terraform/aws ]; then
-  # Despliegue real: credenciales temporales desde el CLI de aws. Valen para cualquier
-  # forma de iniciar sesión (aws login, SSO, perfiles…), la entienda o no el proveedor.
-  if [[ "$destino" == *-* ]] && [ -z "${AWS_ACCESS_KEY_ID:-}" ] && command -v aws >/dev/null; then
+if [[ "$entorno" == *-beanstalk || "$entorno" == *-lambda ]]; then
+  # Despliegue real en AWS: credenciales temporales desde el CLI de aws. Valen para
+  # cualquier forma de iniciar sesión (aws login, SSO, perfiles…).
+  if [ -z "${AWS_ACCESS_KEY_ID:-}" ] && command -v aws >/dev/null; then
     if ! cred=$(aws configure export-credentials --format env); then
       echo "No hay sesión de AWS válida: ejecuta 'aws login' (o 'aws sso login')." >&2
       exit 1
@@ -40,10 +41,11 @@ if [ "$dir" = /w/terraform/aws ]; then
     if [ -n "${!v:-}" ]; then vars+=(-e "$v"); fi
   done
   if [ -d "$HOME/.aws" ]; then vars+=(-v "$HOME/.aws:/root/.aws:ro"); fi
+  if [ -n "${AWS_REGION:-}" ] && [ ${#extra[@]} -gt 0 ]; then extra+=(-var region="$AWS_REGION"); fi
 fi
 
 tty=(); [ -t 0 ] && [ -t 1 ] && tty=(-it)
 # --network host: el contenedor llega al API server en 127.0.0.1:6443.
 exec $MOTOR run --rm "${tty[@]}" --network host --security-opt label=disable \
-  -v "$RAIZ:/w" -w "$dir" "${vars[@]}" -e TF_IN_AUTOMATION \
+  -v "$RAIZ:/w" -w /w/terraform "${vars[@]}" -e TF_IN_AUTOMATION \
   "$TF_IMAGEN" "$cmd" "${extra[@]}" "$@"

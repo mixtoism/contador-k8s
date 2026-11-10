@@ -1,5 +1,5 @@
-entorno         = "prod"
 plataforma      = "lambda"
+entorno         = "prod"
 nodos_cache     = 2
 tipo_nodo_cache = "cache.t4g.small"
 memoria_lambda  = 512

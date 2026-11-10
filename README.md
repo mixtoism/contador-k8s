@@ -8,9 +8,17 @@ Todo corre en contenedores con **podman**: el clúster (k3s en un contenedor), T
 (`hashicorp/terraform`), Helm (`alpine/helm`) y la construcción de la imagen. Aparte de
 podman, sólo hace falta `kubectl` para la vía de manifiestos.
 
-La misma app se despliega en **seis entornos con Terraform**: cada uno es un workspace
-con su `.tfvars`, y se manejan todos igual (`make <entorno>`, `make plan-<entorno>`,
-`make destruir-<entorno>`):
+Hay **un solo Terraform** (`terraform/`) y la plataforma se elige con una variable:
+
+```sh
+terraform apply -var plataforma=kube      -var entorno=dev   # k3s local
+terraform apply -var plataforma=beanstalk -var entorno=dev   # AWS PaaS
+terraform apply -var plataforma=lambda    -var entorno=dev   # AWS serverless
+```
+
+Para no escribir las variables cada vez, hay seis **entornos** ya preparados. Cada uno es
+un workspace con su `entornos/<entorno>.tfvars` y se manejan todos igual (`make <entorno>`,
+`make plan-<entorno>`, `make destruir-<entorno>`):
 
 | Entorno | Dónde | Cómo corre la app | Redis |
 |---|---|---|---|
@@ -19,7 +27,7 @@ con su `.tfvars`, y se manejan todos igual (`make <entorno>`, `make plan-<entorn
 | `dev-lambda` · `prod-lambda` | AWS (serverless) | **API Gateway → Lambda** (tope 2 · sin tope) | **ElastiCache** (1 · 2 nodos) |
 
 Los de Kubernetes se prueban de verdad, en local y en el CI. Los de AWS se prueban
-**simulados** (`make aws-test`, sin cuenta) y se pueden desplegar de verdad con una cuenta.
+**simulados** (`make test`, sin cuenta) y se pueden desplegar de verdad con una cuenta.
 
 En Kubernetes hay además otras **dos vías** de despliegue, para comparar con Terraform:
 
@@ -30,10 +38,13 @@ En Kubernetes hay además otras **dos vías** de despliegue, para comparar con T
 
 ```
 app/                 servidor Node (sin dependencias) + Dockerfile + run.sh (arranque en Lambda)
-terraform/           entornos *-kube: dev-kube.tfvars, prod-kube.tfvars
-  modules/contador/  namespace, Secret, Redis, Deployment, Service
-  aws/               entornos *-lambda y *-beanstalk: VPC, ElastiCache, Beanstalk, Lambda;
-                     tests/ con mocks
+terraform/           la raíz: elige el módulo según var.plataforma
+  entornos/          dev-kube.tfvars, prod-beanstalk.tfvars… (uno por entorno)
+  modules/kube/      namespace, Secret, Redis, Deployment, Service
+  modules/aws-base/  VPC, security groups y ElastiCache (lo que comparten las dos de AWS)
+  modules/beanstalk/ S3 + aplicación + entorno de Elastic Beanstalk
+  modules/lambda/    función Lambda + API Gateway
+  tests/             terraform test con proveedores simulados
 k8s/                 YAML "a pelo" y overlays de kustomize
 helm/contador/       chart con plantillas, helm test y NOTES
 scripts/             cluster.sh, tf.sh, helm.sh, probar.sh, diagnostico.sh
@@ -51,15 +62,15 @@ make imagen             # construye localhost/contador:v1 y la carga en el clús
 make dev-kube prod-kube # Terraform            → localhost:8080 y :8081
 make yaml-dev yaml-prod # vía kubectl -k       → :8082 y :8083
 make helm-dev helm-prod # vía Helm             → :8084 y :8085
-make aws-test           # entornos de AWS, simulados (sin cuenta)
+make test               # terraform test de las tres plataformas, simulado
 make help               # todos los objetivos
 ```
 
 Para actualizar: `make imagen TAG=v2` y luego `make helm-prod TAG=v2` (o
 `scripts/tf.sh prod-kube apply -var imagen=localhost/contador:v2 -var version_app=v2`).
 
-Comandos sueltos: `scripts/tf.sh <entorno> <comando>` (y `kube`/`aws` sin entorno para
-`fmt`, `validate`, `test`), `scripts/helm.sh <args>`,
+Comandos sueltos: `scripts/tf.sh <entorno> <comando>` (o sin entorno para `fmt`,
+`validate`, `test`), `scripts/helm.sh <args>`,
 y para kubectl `export KUBECONFIG=$PWD/kubeconfig`.
 
 Al terminar: `make borrar` (se lleva todo el clúster por delante).
@@ -77,9 +88,8 @@ Al terminar: `make borrar` (se lleva todo el clúster por delante).
 
 ## AWS: PaaS y serverless
 
-El **mismo `app/`**, sin cambiar una línea, es lo que se despliega en los entornos de AWS.
-Todos comparten las plantillas de `terraform/aws/`; la variable `plataforma` del `.tfvars`
-decide qué se crea:
+El **mismo `app/`**, sin cambiar una línea, es lo que se despliega en AWS. La variable
+`plataforma` decide qué se crea:
 
 ```
 *-beanstalk:  navegador ─▶ ALB ─▶ Elastic Beanstalk (EC2, Node.js 22) ─▶ ElastiCache (Redis, TLS)
@@ -101,32 +111,68 @@ Kubernetes tiene su namespace y su Redis.
 | Redis + Secret | **ElastiCache** con `auth_token` y TLS | la misma |
 | `kubectl logs` | CloudWatch Logs (`StreamLogs`) | CloudWatch Logs |
 
-Ficheros en `terraform/aws/`:
+### Cómo se elige la plataforma
 
-- `main.tf`: el nombre del entorno, `es_beanstalk` / `es_lambda` y el zip de `app/`.
-- `red.tf`: VPC con dos zonas; subredes públicas para Beanstalk, privadas para Redis y
-  la Lambda. Security groups: Redis sólo acepta el 6379 desde la app.
-- `elasticache.tf`: *replication group* de Redis 7. En dev, un nodo; en prod, primario
-  + réplica en otra zona con failover automático y copias diarias.
-- `beanstalk.tf`: bucket S3 con las versiones, aplicación, entorno y roles IAM.
-- `lambda.tf`: la función en la VPC, con la capa Web Adapter, y API Gateway delante.
-- `dev-beanstalk.tfvars`, `prod-beanstalk.tfvars`, `dev-lambda.tfvars`, `prod-lambda.tfvars`.
+Se lee empezando por `terraform/main.tf`. Cada plataforma es un **módulo** y cada módulo
+lleva un `count` que vale 1 o 0 según `var.plataforma`:
 
-Los recursos de cada plataforma llevan `count = local.es_beanstalk ? 1 : 0` (o
-`es_lambda`): en un entorno de Lambda, Beanstalk existe 0 veces. Por eso se escriben
-`aws_lambda_function.contador[0]`, y por eso `outputs.tf` da una sola `url`, la que exista.
+```hcl
+module "kube" {
+  source = "./modules/kube"
+  count  = var.plataforma == "kube" ? 1 : 0
+  ...
+}
+
+module "aws_base" {                       # red + ElastiCache, para beanstalk y lambda
+  source = "./modules/aws-base"
+  count  = var.plataforma != "kube" ? 1 : 0
+  ...
+}
+
+module "beanstalk" {
+  source   = "./modules/beanstalk"
+  count    = var.plataforma == "beanstalk" ? 1 : 0
+  subredes = module.aws_base[0].subredes_publicas   # un módulo usa las salidas de otro
+  ...
+}
+```
+
+Un módulo con `count = 0` no crea nada, así que sólo se "enciende" el que toca. Por eso
+se escribe `module.aws_base[0]` y por eso `outputs.tf` da una sola `url`, la del módulo
+que exista (`one(concat(module.kube[*]..., module.beanstalk[*].url, module.lambda[*].url))`).
+
+Los tres módulos reciben lo mismo (nombre, versión, la app y su configuración por variables
+de entorno) y devuelven lo mismo (`url`, `logs`): la raíz no sabe cómo funciona cada
+plataforma por dentro. Añadir una cuarta (ECS, Cloud Run…) sería otro módulo y otra
+opción en la validación de `plataforma`.
+
+`versions.tf` declara los dos proveedores (kubernetes y aws), pero cada uno sólo se
+configura de verdad si se elige su plataforma: con `kube` el de AWS no pide credenciales.
+
+Ficheros de AWS:
+
+- `modules/aws-base`: VPC con dos zonas; subredes públicas para Beanstalk, privadas para
+  Redis y la Lambda. Security groups: Redis sólo acepta el 6379 desde la app. ElastiCache:
+  en dev, un nodo; en prod, primario + réplica en otra zona con failover y copias diarias.
+- `modules/beanstalk`: zip de `app/` en S3, aplicación, entorno (ALB, autoescalado, health
+  check, despliegue por lotes, logs) y roles IAM.
+- `modules/lambda`: la función en la VPC con la capa Web Adapter, y API Gateway delante.
 
 Un detalle: ElastiCache sólo admite contraseña con cifrado en tránsito, así que la app
 se conecta por TLS cuando lleva `REDIS_TLS=1` (`app/redis.js`). Para simplificar, la
 contraseña va en las variables de entorno; en un proyecto real se leería de Secrets Manager.
 
-`make aws-test` lo prueba **sin cuenta ni credenciales**: `terraform test` con
-`mock_provider` para `aws` y `archive` hace *plan* y *apply* de verdad, pero los
-recursos sólo existen en memoria. Las pruebas (`aws/tests/mock.tftest.hcl`) tienen un
-*run* por entorno y comprueban que cada uno crea sólo su plataforma, el zip de `app/`, el
-health check, el despliegue por lotes, TLS, el failover en prod, que Redis sólo admite a
-la app y que se rechazan un entorno o una plataforma inválidos y un `instancias_min`
-mayor que el máximo.
+`make test` lo prueba **sin clúster, cuenta ni credenciales**: `terraform test` con
+`mock_provider` para `kubernetes`, `aws` y `archive` hace *plan* y *apply* de verdad, pero
+los recursos sólo existen en memoria. Las pruebas (`tests/plataformas.tftest.hcl`) son de
+dos tipos:
+
+- **la raíz**, una por plataforma: que sólo se crea su módulo y que la `url` es la suya;
+  y que se rechazan una plataforma o un entorno inválidos y un `instancias_min` mayor
+  que el máximo.
+- **cada módulo suelto** (`module { source = "./modules/lambda" }`): el zip de `app/`, el
+  health check, el despliegue por lotes, TLS, el failover en prod, que Redis sólo admite
+  a la app…
 
 ### Desplegarlo de verdad
 
@@ -144,13 +190,13 @@ make destruir-dev-lambda      # destruirlo al acabar
 Igual con `dev-beanstalk`, `prod-lambda` y `prod-beanstalk`; pueden convivir.
 **Cuesta dinero** mientras exista (ElastiCache siempre; en Beanstalk, también EC2 y el
 ALB): no olvides el `destruir-*`.
-El estado queda en local (`terraform/aws/terraform.tfstate.d/`); no lo borres antes de
+El estado queda en local (`terraform/terraform.tfstate.d/<entorno>/`); no lo borres antes de
 destruir, o habrá que borrar los recursos a mano.
 
 ## En GitHub Actions
 
 Cada push a `main` valida todo (`fmt`, `validate`, `helm lint`, `kustomize build`),
-pasa las pruebas de AWS en mock y, en paralelo, levanta clústeres k3s dentro del runner
+pasa `terraform test` (las tres plataformas en mock) y, en paralelo, levanta clústeres k3s dentro del runner
 (sin cuenta en la nube): uno por cada vía alternativa (yaml y helm: instalar, probar,
 actualizar con Helm, desinstalar) y otro para `dev-kube` y `prod-kube`:
 
@@ -167,7 +213,7 @@ cuántas peticiones atendió cada pod. Es lo que conviene proyectar.
 
 1. **Autorreparación**: `kubectl -n contador-prod delete pod -l app=contador --wait=false`
    y recargar: aparecen colores nuevos, el contador sigue (vive en Redis).
-2. **Escalado declarativo**: cambia `replicas` en `prod-kube.tfvars`, `make plan-prod-kube`
+2. **Escalado declarativo**: cambia `replicas` en `entornos/prod-kube.tfvars`, `make plan-prod-kube`
    (`1 to change`) y `make prod-kube`.
 3. **Drift**: `kubectl -n contador-prod scale deploy/contador --replicas=1` y luego
    `make plan-prod-kube`: Terraform quiere volver a 3.
@@ -175,7 +221,8 @@ cuántas peticiones atendió cada pod. Es lo que conviene proyectar.
    `while sleep 0.2; do curl -s localhost:8081/api; done` y en otra
    `scripts/tf.sh prod-kube apply -var version_app=v2`: la versión cambia sin errores.
 5. **Mismo código, otro entorno**: `make plan-dev-kube` vs `make plan-prod-kube`; y en
-   AWS, `make plan-dev-lambda` vs `make plan-dev-beanstalk` (con cuenta).
+   AWS, `make plan-dev-lambda` vs `make plan-dev-beanstalk` (con cuenta). Sin cuenta, en
+   `tests/` se ve qué módulos se encienden con cada plataforma.
 6. **Secreto generado**: la contraseña de Redis la crea Terraform (`random_password`);
    mira `kubectl -n contador-dev get secret redis -o yaml`… y que también está en el
    `terraform.tfstate`: por eso el estado nunca se sube al repo.

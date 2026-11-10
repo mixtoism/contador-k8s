@@ -25,13 +25,11 @@ jobs:
           sh -n app/run.sh
           bash -n scripts/*.sh
       - name: terraform fmt
-        run: scripts/tf.sh kube fmt -check -diff -recursive
-      - name: terraform validate (local y aws)
+        run: scripts/tf.sh fmt -check -diff -recursive
+      - name: terraform validate
         run: |
-          scripts/tf.sh kube init -input=false -backend=false
-          scripts/tf.sh kube validate -no-color
-          scripts/tf.sh aws init -input=false -backend=false
-          scripts/tf.sh aws validate -no-color
+          scripts/tf.sh init -input=false -backend=false
+          scripts/tf.sh validate -no-color
       - name: helm lint
         run: |
           for e in dev prod; do
@@ -41,16 +39,16 @@ jobs:
         run: |
           for e in dev prod; do kubectl kustomize "k8s/$e" > /dev/null && echo "k8s/$e ok"; done
 
-  aws-mock:
+  terraform-test:
     needs: validar
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: terraform test con AWS simulado
+      - name: terraform test (kube, beanstalk y lambda simulados)
         run: |
-          scripts/tf.sh aws init -input=false
-          scripts/tf.sh aws test -no-color | tee salida.txt
-          { echo "## AWS (mock)"; echo '```'; grep -E 'run "|Success|Failure' salida.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          scripts/tf.sh init -input=false -backend=false
+          scripts/tf.sh test -no-color | tee salida.txt
+          { echo "## terraform test (mock)"; echo '```'; grep -E 'run "|Success|Failure' salida.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
   terraform:
     needs: validar

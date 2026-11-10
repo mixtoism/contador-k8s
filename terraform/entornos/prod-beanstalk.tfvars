@@ -1,5 +1,5 @@
-entorno         = "prod"
 plataforma      = "beanstalk"
+entorno         = "prod"
 instancias_min  = 2
 instancias_max  = 4
 tipo_instancia  = "t4g.small"

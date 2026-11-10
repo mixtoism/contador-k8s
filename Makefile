@@ -3,7 +3,7 @@ export MOTOR ?= podman
 TAG ?= v1
 KUBECTL = kubectl --kubeconfig kubeconfig
 
-.PHONY: help cluster imagen borrar fmt aws-test $(KUBE) $(AWS) \
+.PHONY: help cluster imagen borrar fmt test $(KUBE) $(AWS) \
         yaml-dev yaml-prod helm-dev helm-prod
 
 help:  ## Muestra esta ayuda
@@ -16,7 +16,8 @@ imagen:  ## Construye la imagen y la carga en el clúster (TAG=v1)
 borrar:  ## Elimina el clúster
 	scripts/cluster.sh borrar
 
-# ---- Entornos con Terraform: un workspace y un .tfvars por entorno ----
+# ---- Terraform: un solo terraform/, la plataforma se elige con una variable ----
+# Cada entorno es un workspace + terraform/entornos/<entorno>.tfvars (plataforma = "...").
 KUBE = dev-kube prod-kube
 AWS  = dev-lambda prod-lambda dev-beanstalk prod-beanstalk
 # La imagen sólo se pasa en los entornos de Kubernetes.
@@ -35,10 +36,10 @@ destruir-%:  ## Terraform destroy de un entorno (destruir-dev-beanstalk…)
 	scripts/tf.sh $* init -input=false
 	scripts/tf.sh $* destroy
 fmt:
-	scripts/tf.sh kube fmt -recursive
-aws-test:  ## terraform test de los entornos de AWS, simulado (sin cuenta)
-	scripts/tf.sh aws init -input=false
-	scripts/tf.sh aws test
+	scripts/tf.sh fmt -recursive
+test:  ## terraform test: las tres plataformas, simulado (sin clúster ni cuenta de AWS)
+	scripts/tf.sh init -input=false -backend=false
+	scripts/tf.sh test
 
 # ---- Vía 2: manifiestos + kustomize (k8s/) ----
 yaml-dev yaml-prod:  ## kubectl apply -k → :8082 / :8083

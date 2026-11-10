@@ -1,10 +1,10 @@
-# Un solo Terraform, tres formas de desplegar la misma app:
+# Un solo OpenTofu, tres formas de desplegar la misma app:
 #
-#   terraform apply -var plataforma=kube      -var entorno=dev   → k3s local
-#   terraform apply -var plataforma=beanstalk -var entorno=dev   → Elastic Beanstalk + ElastiCache
-#   terraform apply -var plataforma=lambda    -var entorno=dev   → Lambda + API Gateway + ElastiCache
+#   tofu apply -var plataforma=kube      -var entorno=dev   → k3s local
+#   tofu apply -var plataforma=beanstalk -var entorno=dev   → Elastic Beanstalk + ElastiCache
+#   tofu apply -var plataforma=lambda    -var entorno=dev   → Lambda + API Gateway + ElastiCache
 #
-# (o con un fichero: terraform apply -var-file=entornos/dev-beanstalk.tfvars)
+# (o con un fichero: tofu apply -var-file=entornos/dev-beanstalk.tfvars)
 #
 # Cada plataforma es un módulo de modules/. El truco es count: un módulo con count = 0
 # no crea nada, así que según var.plataforma sólo "se enciende" el que toca.

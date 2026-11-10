@@ -16,30 +16,30 @@ imagen:  ## Construye la imagen y la carga en el clúster (TAG=v1)
 borrar:  ## Elimina el clúster
 	scripts/cluster.sh borrar
 
-# ---- Terraform: un solo terraform/, la plataforma se elige con una variable ----
-# Cada entorno es un workspace + terraform/entornos/<entorno>.tfvars (plataforma = "...").
+# ---- OpenTofu: un solo proyecto en tofu/, la plataforma se elige con una variable ----
+# Cada entorno es un workspace + tofu/entornos/<entorno>.tfvars (plataforma = "...").
 KUBE = dev-kube prod-kube
 AWS  = dev-lambda prod-lambda dev-beanstalk prod-beanstalk
 # La imagen sólo se pasa en los entornos de Kubernetes.
 img = $(if $(filter %-kube,$(1)),-var imagen=localhost/contador:$(TAG))
 
-dev-kube prod-kube:  ## Terraform apply en el clúster local → dev-kube :8080, prod-kube :8081
-	scripts/tf.sh $@ init -input=false
-	scripts/tf.sh $@ apply $(call img,$@)
-dev-lambda prod-lambda dev-beanstalk prod-beanstalk:  ## Terraform apply en AWS DE VERDAD (cuesta dinero; pide confirmación)
-	scripts/tf.sh $@ init -input=false
-	scripts/tf.sh $@ apply
-plan-%:  ## Terraform plan de un entorno (plan-dev-kube, plan-prod-lambda…)
-	scripts/tf.sh $* init -input=false
-	scripts/tf.sh $* plan $(call img,$*)
-destruir-%:  ## Terraform destroy de un entorno (destruir-dev-beanstalk…)
-	scripts/tf.sh $* init -input=false
-	scripts/tf.sh $* destroy
+dev-kube prod-kube:  ## OpenTofu apply en el clúster local → dev-kube :8080, prod-kube :8081
+	scripts/tofu.sh $@ init -input=false
+	scripts/tofu.sh $@ apply $(call img,$@)
+dev-lambda prod-lambda dev-beanstalk prod-beanstalk:  ## OpenTofu apply en AWS DE VERDAD (cuesta dinero; pide confirmación)
+	scripts/tofu.sh $@ init -input=false
+	scripts/tofu.sh $@ apply
+plan-%:  ## OpenTofu plan de un entorno (plan-dev-kube, plan-prod-lambda…)
+	scripts/tofu.sh $* init -input=false
+	scripts/tofu.sh $* plan $(call img,$*)
+destruir-%:  ## OpenTofu destroy de un entorno (destruir-dev-beanstalk…)
+	scripts/tofu.sh $* init -input=false
+	scripts/tofu.sh $* destroy
 fmt:
-	scripts/tf.sh fmt -recursive
-test:  ## terraform test: las tres plataformas, simulado (sin clúster ni cuenta de AWS)
-	scripts/tf.sh init -input=false -backend=false
-	scripts/tf.sh test
+	scripts/tofu.sh fmt -recursive
+test:  ## tofu test: las tres plataformas, simulado (sin clúster ni cuenta de AWS)
+	scripts/tofu.sh init -input=false -backend=false
+	scripts/tofu.sh test
 
 # ---- Vía 2: manifiestos + kustomize (k8s/) ----
 yaml-dev yaml-prod:  ## kubectl apply -k → :8082 / :8083

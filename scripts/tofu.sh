@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Terraform en contenedor, siempre sobre terraform/ (un solo Terraform para todo).
+# OpenTofu en contenedor, siempre sobre tofu/ (un solo OpenTofu para todo).
 #
-#   scripts/tf.sh <entorno> <comando> [args]   entorno = dev|prod - kube|beanstalk|lambda
-#   scripts/tf.sh <comando> [args]             sin entorno: fmt, validate, test (mock)…
+#   scripts/tofu.sh <entorno> <comando> [args]   entorno = dev|prod - kube|beanstalk|lambda
+#   scripts/tofu.sh <comando> [args]             sin entorno: fmt, validate, test (mock)…
 #
 # Con entorno, cada uno es un workspace (estado propio) y a plan/apply/destroy se les
 # pasa entornos/<entorno>.tfvars, donde está plataforma = "...". Equivale a:
-#   terraform workspace select dev-beanstalk
-#   terraform apply -var-file=entornos/dev-beanstalk.tfvars
+#   tofu workspace select dev-beanstalk
+#   tofu apply -var-file=entornos/dev-beanstalk.tfvars
 set -euo pipefail
 source "$(dirname "$0")/comun.sh"
 
@@ -15,12 +15,12 @@ entorno=""
 case "${1:?uso: $0 [entorno] <comando> [args...]}" in
   *-kube|*-beanstalk|*-lambda) entorno=$1; shift ;;
 esac
-cmd=${1:?falta el comando de terraform}; shift
+cmd=${1:?falta el comando de tofu}; shift
 
 vars=() extra=()
 if [ -n "$entorno" ]; then
-  if [ ! -f "$RAIZ/terraform/entornos/$entorno.tfvars" ]; then
-    echo "Entorno desconocido: $entorno (mira terraform/entornos/)" >&2; exit 1
+  if [ ! -f "$RAIZ/tofu/entornos/$entorno.tfvars" ]; then
+    echo "Entorno desconocido: $entorno (mira tofu/entornos/)" >&2; exit 1
   fi
   vars=(-e TF_WORKSPACE="$entorno")
   case "$cmd" in plan|apply|destroy) extra=(-var-file="entornos/$entorno.tfvars") ;; esac
@@ -47,5 +47,5 @@ fi
 tty=(); [ -t 0 ] && [ -t 1 ] && tty=(-it)
 # --network host: el contenedor llega al API server en 127.0.0.1:6443.
 exec $MOTOR run --rm "${tty[@]}" --network host --security-opt label=disable \
-  -v "$RAIZ:/w" -w /w/terraform "${vars[@]}" -e TF_IN_AUTOMATION \
-  "$TF_IMAGEN" "$cmd" "${extra[@]}" "$@"
+  -v "$RAIZ:/w" -w /w/tofu "${vars[@]}" -e TF_IN_AUTOMATION \
+  "$TOFU_IMAGEN" "$cmd" "${extra[@]}" "$@"

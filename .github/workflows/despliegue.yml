@@ -24,12 +24,12 @@ jobs:
           for f in app/*.js; do node --check "$f"; done
           sh -n app/run.sh
           bash -n scripts/*.sh
-      - name: terraform fmt
-        run: scripts/tf.sh fmt -check -diff -recursive
-      - name: terraform validate
+      - name: tofu fmt
+        run: scripts/tofu.sh fmt -check -diff -recursive
+      - name: tofu validate
         run: |
-          scripts/tf.sh init -input=false -backend=false
-          scripts/tf.sh validate -no-color
+          scripts/tofu.sh init -input=false -backend=false
+          scripts/tofu.sh validate -no-color
       - name: helm lint
         run: |
           for e in dev prod; do
@@ -39,18 +39,18 @@ jobs:
         run: |
           for e in dev prod; do kubectl kustomize "k8s/$e" > /dev/null && echo "k8s/$e ok"; done
 
-  terraform-test:
+  tofu-test:
     needs: validar
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: terraform test (kube, beanstalk y lambda simulados)
+      - name: tofu test (kube, beanstalk y lambda simulados)
         run: |
-          scripts/tf.sh init -input=false -backend=false
-          scripts/tf.sh test -no-color | tee salida.txt
-          { echo "## terraform test (mock)"; echo '```'; grep -E 'run "|Success|Failure' salida.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          scripts/tofu.sh init -input=false -backend=false
+          scripts/tofu.sh test -no-color | tee salida.txt
+          { echo "## tofu test (mock)"; echo '```'; grep -E 'run "|Success|Failure' salida.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
-  terraform:
+  tofu:
     needs: validar
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -79,18 +79,18 @@ jobs:
           scripts/cluster.sh cargar v1
           scripts/cluster.sh cargar v2
 
-      - name: terraform init
-        run: scripts/tf.sh "$E" init -input=false
+      - name: tofu init
+        run: scripts/tofu.sh "$E" init -input=false
 
       - name: "Fase 1: instalar"
         run: |
-          fase() {  # fase <título> <args de terraform...>
+          fase() {  # fase <título> <args de tofu...>
             local titulo=$1; shift
-            scripts/tf.sh "$E" "$@" -auto-approve -input=false -no-color | tee salida.txt
+            scripts/tofu.sh "$E" "$@" -auto-approve -input=false -no-color | tee salida.txt
             { echo "### $titulo"; echo '```'; grep -E '^(Plan:|No changes|Destroy complete)' salida.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           }
           declare -f fase > fase.sh
-          echo "## Terraform · \`$E\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "## OpenTofu · \`$E\`" >> "$GITHUB_STEP_SUMMARY"
           fase "1 · Instalar" apply -var imagen=localhost/contador:v1
           scripts/probar.sh "$URL" 30 | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -110,11 +110,11 @@ jobs:
           scripts/probar.sh "$URL" 50 | tee -a "$GITHUB_STEP_SUMMARY"
           test "$(curl -fs "$URL/stats" | jq '.pods | length')" -ge 5
 
-      - name: "Extra: Terraform detecta un cambio hecho a mano (drift)"
+      - name: "Extra: OpenTofu detecta un cambio hecho a mano (drift)"
         run: |
           $MOTOR exec contador-k3s kubectl -n "$NS" scale deployment/contador --replicas=1
           set +e
-          scripts/tf.sh "$E" plan -detailed-exitcode -input=false -no-color \
+          scripts/tofu.sh "$E" plan -detailed-exitcode -input=false -no-color \
             -var imagen=localhost/contador:v2 -var version_app=v2 -var replicas=5 | tee salida.txt
           codigo=${PIPESTATUS[0]}
           set -e

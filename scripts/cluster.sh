@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Clúster Kubernetes de un nodo (k3s) dentro de un contenedor.
 # Los NodePort 30080-30085 se publican en localhost:8080-8085:
-#   terraform dev/prod → 8080/8081 · kubectl dev/prod → 8082/8083 · helm dev/prod → 8084/8085
+#   tofu dev/prod → 8080/8081 · kubectl dev/prod → 8082/8083 · helm dev/prod → 8084/8085
 #   scripts/cluster.sh crear | borrar | cargar <tag>
 set -euo pipefail
 source "$(dirname "$0")/comun.sh"

@@ -1,4 +1,4 @@
-# terraform test con todo simulado: ni clúster ni cuenta de AWS.
+# tofu test con todo simulado: ni clúster ni cuenta de AWS.
 # Los proveedores "mock" devuelven valores inventados para lo que calcularía la nube
 # (IDs, ARN, endpoints…); lo que comprobamos es la configuración que se le pediría.
 #

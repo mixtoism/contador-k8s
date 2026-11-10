@@ -1,6 +1,7 @@
 terraform {
-  # mock_provider en terraform test (1.7) y validaciones entre variables (1.9)
-  required_version = ">= 1.9"
+  # OpenTofu 1.8+: mock_provider en tofu test y validaciones entre variables
+  # (el bloque se sigue llamando "terraform": OpenTofu es compatible)
+  required_version = ">= 1.8"
 
   required_providers {
     kubernetes = {

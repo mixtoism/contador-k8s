@@ -2,7 +2,7 @@ locals {
   ns = "contador-${var.entorno}"
   etiquetas = {
     "app.kubernetes.io/part-of"    = "contador"
-    "app.kubernetes.io/managed-by" = "terraform"
+    "app.kubernetes.io/managed-by" = "opentofu"
     entorno                        = var.entorno
   }
 }

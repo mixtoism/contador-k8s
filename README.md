@@ -1,19 +1,23 @@
 # contador-k8s
 
-Demo de despliegue en **Kubernetes con Terraform**. La app es un contador de visitas
+Demo de despliegue en **Kubernetes con OpenTofu**. La app es un contador de visitas
 (Node, sin dependencias) con Redis. **Cada pod pinta la página de un color distinto**,
 así que al recargar se ve qué réplica responde.
 
-Todo corre en contenedores con **podman**: el clúster (k3s en un contenedor), Terraform
-(`hashicorp/terraform`), Helm (`alpine/helm`) y la construcción de la imagen. Aparte de
+> **OpenTofu** es el fork libre (licencia MPL, Linux Foundation) de Terraform: mismo
+> lenguaje (HCL, ficheros `.tf`), mismos proveedores y mismos comandos cambiando
+> `terraform` por `tofu`. Todo lo de este repo funcionaría igual con Terraform.
+
+Todo corre en contenedores con **podman**: el clúster (k3s en un contenedor), OpenTofu
+(`opentofu/opentofu`), Helm (`alpine/helm`) y la construcción de la imagen. Aparte de
 podman, sólo hace falta `kubectl` para la vía de manifiestos.
 
-Hay **un solo Terraform** (`terraform/`) y la plataforma se elige con una variable:
+Hay **un solo proyecto de OpenTofu** (`tofu/`) y la plataforma se elige con una variable:
 
 ```sh
-terraform apply -var plataforma=kube      -var entorno=dev   # k3s local
-terraform apply -var plataforma=beanstalk -var entorno=dev   # AWS PaaS
-terraform apply -var plataforma=lambda    -var entorno=dev   # AWS serverless
+tofu apply -var plataforma=kube      -var entorno=dev   # k3s local
+tofu apply -var plataforma=beanstalk -var entorno=dev   # AWS PaaS
+tofu apply -var plataforma=lambda    -var entorno=dev   # AWS serverless
 ```
 
 Para no escribir las variables cada vez, hay seis **entornos** ya preparados. Cada uno es
@@ -29,7 +33,7 @@ un workspace con su `entornos/<entorno>.tfvars` y se manejan todos igual (`make 
 Los de Kubernetes se prueban de verdad, en local y en el CI. Los de AWS se prueban
 **simulados** (`make test`, sin cuenta) y se pueden desplegar de verdad con una cuenta.
 
-En Kubernetes hay además otras **dos vías** de despliegue, para comparar con Terraform:
+En Kubernetes hay además otras **dos vías** de despliegue, para comparar con OpenTofu:
 
 | Vía | Dónde | dev | prod |
 |---|---|---|---|
@@ -38,16 +42,16 @@ En Kubernetes hay además otras **dos vías** de despliegue, para comparar con T
 
 ```
 app/                 servidor Node (sin dependencias) + Dockerfile + run.sh (arranque en Lambda)
-terraform/           la raíz: elige el módulo según var.plataforma
+tofu/                la raíz: elige el módulo según var.plataforma
   entornos/          dev-kube.tfvars, prod-beanstalk.tfvars… (uno por entorno)
   modules/kube/      namespace, Secret, Redis, Deployment, Service
   modules/aws-base/  VPC, security groups y ElastiCache (lo que comparten las dos de AWS)
   modules/beanstalk/ S3 + aplicación + entorno de Elastic Beanstalk
   modules/lambda/    función Lambda + API Gateway
-  tests/             terraform test con proveedores simulados
+  tests/             tofu test con proveedores simulados
 k8s/                 YAML "a pelo" y overlays de kustomize
 helm/contador/       chart con plantillas, helm test y NOTES
-scripts/             cluster.sh, tf.sh, helm.sh, probar.sh, diagnostico.sh
+scripts/             cluster.sh, tofu.sh, helm.sh, probar.sh, diagnostico.sh
 .github/workflows/   CI
 ```
 
@@ -59,17 +63,17 @@ En todos los casos, dev y prod son **las mismas plantillas con distintos valores
 ```bash
 make cluster            # k3s en podman; deja ./kubeconfig
 make imagen             # construye localhost/contador:v1 y la carga en el clúster
-make dev-kube prod-kube # Terraform            → localhost:8080 y :8081
+make dev-kube prod-kube # OpenTofu             → localhost:8080 y :8081
 make yaml-dev yaml-prod # vía kubectl -k       → :8082 y :8083
 make helm-dev helm-prod # vía Helm             → :8084 y :8085
-make test               # terraform test de las tres plataformas, simulado
+make test               # tofu test de las tres plataformas, simulado
 make help               # todos los objetivos
 ```
 
 Para actualizar: `make imagen TAG=v2` y luego `make helm-prod TAG=v2` (o
-`scripts/tf.sh prod-kube apply -var imagen=localhost/contador:v2 -var version_app=v2`).
+`scripts/tofu.sh prod-kube apply -var imagen=localhost/contador:v2 -var version_app=v2`).
 
-Comandos sueltos: `scripts/tf.sh <entorno> <comando>` (o sin entorno para `fmt`,
+Comandos sueltos: `scripts/tofu.sh <entorno> <comando>` (o sin entorno para `fmt`,
 `validate`, `test`), `scripts/helm.sh <args>`,
 y para kubectl `export KUBECONFIG=$PWD/kubeconfig`.
 
@@ -113,7 +117,7 @@ Kubernetes tiene su namespace y su Redis.
 
 ### Cómo se elige la plataforma
 
-Se lee empezando por `terraform/main.tf`. Cada plataforma es un **módulo** y cada módulo
+Se lee empezando por `tofu/main.tf`. Cada plataforma es un **módulo** y cada módulo
 lleva un `count` que vale 1 o 0 según `var.plataforma`:
 
 ```hcl
@@ -162,7 +166,7 @@ Un detalle: ElastiCache sólo admite contraseña con cifrado en tránsito, así 
 se conecta por TLS cuando lleva `REDIS_TLS=1` (`app/redis.js`). Para simplificar, la
 contraseña va en las variables de entorno; en un proyecto real se leería de Secrets Manager.
 
-`make test` lo prueba **sin clúster, cuenta ni credenciales**: `terraform test` con
+`make test` lo prueba **sin clúster, cuenta ni credenciales**: `tofu test` con
 `mock_provider` para `kubernetes`, `aws` y `archive` hace *plan* y *apply* de verdad, pero
 los recursos sólo existen en memoria. Las pruebas (`tests/plataformas.tftest.hcl`) son de
 dos tipos:
@@ -177,34 +181,34 @@ dos tipos:
 ### Desplegarlo de verdad
 
 El CI no lo hace. Hace falta el CLI `aws` con sesión iniciada (`aws login`, `aws sso login`
-o claves); `scripts/tf.sh` le pide credenciales temporales y se las pasa al contenedor.
+o claves); `scripts/tofu.sh` le pide credenciales temporales y se las pasa al contenedor.
 
 ```sh
 aws sts get-caller-identity   # comprobar la cuenta
 make plan-dev-lambda          # qué se crearía, sin crear nada
 make dev-lambda               # init + apply (pide confirmación); ~10-15 min
-scripts/tf.sh dev-lambda output
+scripts/tofu.sh dev-lambda output
 make destruir-dev-lambda      # destruirlo al acabar
 ```
 
 Igual con `dev-beanstalk`, `prod-lambda` y `prod-beanstalk`; pueden convivir.
 **Cuesta dinero** mientras exista (ElastiCache siempre; en Beanstalk, también EC2 y el
 ALB): no olvides el `destruir-*`.
-El estado queda en local (`terraform/terraform.tfstate.d/<entorno>/`); no lo borres antes de
+El estado queda en local (`tofu/terraform.tfstate.d/<entorno>/`); no lo borres antes de
 destruir, o habrá que borrar los recursos a mano.
 
 ## En GitHub Actions
 
 Cada push a `main` valida todo (`fmt`, `validate`, `helm lint`, `kustomize build`),
-pasa `terraform test` (las tres plataformas en mock) y, en paralelo, levanta clústeres k3s dentro del runner
+pasa `tofu test` (las tres plataformas en mock) y, en paralelo, levanta clústeres k3s dentro del runner
 (sin cuenta en la nube): uno por cada vía alternativa (yaml y helm: instalar, probar,
 actualizar con Helm, desinstalar) y otro para `dev-kube` y `prod-kube`:
 
-1. **Instalar** — `terraform apply` con v1.
+1. **Instalar** — `tofu apply` con v1.
 2. **Actualizar** — v2: rolling update sin cortes (`max_unavailable = 0`).
 3. **Escalar** — 5 réplicas y comprueba que responden 5 pods distintos.
-4. **Drift** — escala a mano con `kubectl` y `terraform plan` lo detecta.
-5. **Eliminar** — `terraform destroy`.
+4. **Drift** — escala a mano con `kubectl` y `tofu plan` lo detecta.
+5. **Eliminar** — `tofu destroy`.
 
 El **resumen de la ejecución** muestra la línea `Plan:` de cada fase y una tabla con
 cuántas peticiones atendió cada pod. Es lo que conviene proyectar.
@@ -216,14 +220,14 @@ cuántas peticiones atendió cada pod. Es lo que conviene proyectar.
 2. **Escalado declarativo**: cambia `replicas` en `entornos/prod-kube.tfvars`, `make plan-prod-kube`
    (`1 to change`) y `make prod-kube`.
 3. **Drift**: `kubectl -n contador-prod scale deploy/contador --replicas=1` y luego
-   `make plan-prod-kube`: Terraform quiere volver a 3.
+   `make plan-prod-kube`: OpenTofu quiere volver a 3.
 4. **Actualización continua**: en una terminal
    `while sleep 0.2; do curl -s localhost:8081/api; done` y en otra
-   `scripts/tf.sh prod-kube apply -var version_app=v2`: la versión cambia sin errores.
+   `scripts/tofu.sh prod-kube apply -var version_app=v2`: la versión cambia sin errores.
 5. **Mismo código, otro entorno**: `make plan-dev-kube` vs `make plan-prod-kube`; y en
    AWS, `make plan-dev-lambda` vs `make plan-dev-beanstalk` (con cuenta). Sin cuenta, en
    `tests/` se ve qué módulos se encienden con cada plataforma.
-6. **Secreto generado**: la contraseña de Redis la crea Terraform (`random_password`);
+6. **Secreto generado**: la contraseña de Redis la crea OpenTofu (`random_password`);
    mira `kubectl -n contador-dev get secret redis -o yaml`… y que también está en el
    `terraform.tfstate`: por eso el estado nunca se sube al repo.
 

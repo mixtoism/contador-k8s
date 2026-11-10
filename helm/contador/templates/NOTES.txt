@@ -1,0 +1,5 @@
+Contador desplegado en {{ .Release.Namespace }} ({{ .Values.entorno }}, {{ .Values.replicas }} réplicas, {{ include "contador.version" . }}).
+{{- with .Values.servicio.nodePort }}
+Abre http://localhost:{{ sub . 22000 }}
+{{- end }}
+Prueba: helm test {{ .Release.Name }} -n {{ .Release.Namespace }}

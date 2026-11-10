@@ -19,18 +19,42 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Sintaxis de la app
-        run: node --check app/server.js
+      - name: Sintaxis de la app y los scripts
+        run: |
+          node --check app/server.js
+          bash -n scripts/*.sh
       - name: terraform fmt
         run: scripts/tf.sh dev fmt -check -diff -recursive
-      - name: terraform init
-        run: scripts/tf.sh dev init -input=false -backend=false
-      - name: terraform validate
-        run: scripts/tf.sh dev validate -no-color
+      - name: terraform validate (local y aws)
+        run: |
+          scripts/tf.sh dev init -input=false -backend=false
+          scripts/tf.sh dev validate -no-color
+          scripts/tf.sh aws init -input=false -backend=false
+          scripts/tf.sh aws validate -no-color
+      - name: helm lint
+        run: |
+          for e in dev prod; do
+            scripts/helm.sh lint helm/contador -f "helm/contador/values-$e.yaml"
+          done
+      - name: kustomize build
+        run: |
+          for e in dev prod; do kubectl kustomize "k8s/$e" > /dev/null && echo "k8s/$e ok"; done
 
-  desplegar:
+  aws-mock:
     needs: validar
     runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: terraform test con AWS simulado
+        run: |
+          scripts/tf.sh aws init -input=false
+          scripts/tf.sh aws test -no-color | tee salida.txt
+          { echo "## AWS (mock)"; echo '```'; grep -E 'run "|Success|Failure' salida.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  terraform:
+    needs: validar
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -64,7 +88,7 @@ jobs:
             { echo "### $titulo"; echo '```'; grep -E '^(Plan:|No changes|Destroy complete)' salida.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           }
           declare -f fase > fase.sh
-          echo "## Entorno \`$E\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Terraform · \`$E\`" >> "$GITHUB_STEP_SUMMARY"
           fase "1 · Instalar" apply -var imagen=localhost/contador:v1
           scripts/probar.sh "$URL" 30 | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -101,7 +125,59 @@ jobs:
 
       - name: Estado del clúster si algo falla
         if: failure()
-        run: $MOTOR exec contador-k3s kubectl get all,events -A || true
+        run: scripts/diagnostico.sh
+
+      - name: Borrar clúster
+        if: always()
+        run: scripts/cluster.sh borrar
+
+  alternativas:
+    needs: validar
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        via: [yaml, helm]
+    env:
+      VIA: ${{ matrix.via }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Crear clúster y cargar la imagen
+        run: |
+          scripts/cluster.sh crear
+          scripts/cluster.sh cargar v1
+          scripts/cluster.sh cargar v2
+
+      - name: Instalar dev y prod
+        run: |
+          make "$VIA-dev" "$VIA-prod"
+          if [ "$VIA" = helm ]; then
+            for e in dev prod; do scripts/helm.sh test contador -n "contador-helm-$e"; done
+          fi
+
+      - name: Probar
+        run: |
+          if [ "$VIA" = yaml ]; then puertos="8082 8083"; else puertos="8084 8085"; fi
+          for p in $puertos; do
+            echo "## $VIA · localhost:$p" >> "$GITHUB_STEP_SUMMARY"
+            scripts/probar.sh "http://localhost:$p" 30 | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Actualizar prod a v2 (sólo helm)
+        if: matrix.via == 'helm'
+        run: |
+          make helm-prod TAG=v2
+          scripts/helm.sh history contador -n contador-helm-prod | tee -a "$GITHUB_STEP_SUMMARY"
+          curl -fs http://localhost:8085/api | jq -e '.version == "v2"'
+
+      - name: Desinstalar
+        run: make "quitar-$VIA-dev" "quitar-$VIA-prod"
+
+      - name: Estado del clúster si algo falla
+        if: failure()
+        run: scripts/diagnostico.sh
 
       - name: Borrar clúster
         if: always()

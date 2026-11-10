@@ -1,0 +1,18 @@
+entorno: dev
+replicas: 1
+
+imagen:
+  repositorio: localhost/contador
+  tag: ""          # vacío = appVersion del chart
+  pullPolicy: IfNotPresent
+
+servicio:
+  tipo: NodePort
+  nodePort: null   # null = lo elige Kubernetes
+
+recursos:
+  requests: { cpu: 50m, memory: 32Mi }
+  limits: { cpu: 200m, memory: 128Mi }
+
+redis:
+  imagen: docker.io/library/redis:7-alpine

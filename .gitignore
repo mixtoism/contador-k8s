@@ -1,5 +1,7 @@
 kubeconfig
-terraform/.terraform/
-terraform/terraform.tfstate*
-terraform/terraform.tfstate.d/
-terraform/*.tfplan
+**/.terraform/
+**/terraform.tfstate*
+**/terraform.tfstate.d/
+**/*.tfplan
+salida.txt
+fase.sh

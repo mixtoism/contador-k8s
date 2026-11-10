@@ -1,0 +1,6 @@
+apiVersion: v2
+name: contador
+description: Contador de visitas con Redis (demo de despliegue)
+type: application
+version: 0.1.0
+appVersion: "v1"

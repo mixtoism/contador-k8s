@@ -1,0 +1,4 @@
+entorno: helm-dev
+replicas: 1
+servicio:
+  nodePort: 30084   # → http://localhost:8084

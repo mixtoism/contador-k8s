@@ -1,0 +1,6 @@
+entorno: helm-prod
+replicas: 3
+servicio:
+  nodePort: 30085   # → http://localhost:8085
+recursos:
+  limits: { cpu: 500m, memory: 128Mi }

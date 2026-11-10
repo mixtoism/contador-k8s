@@ -1,12 +1,12 @@
 output "namespace" {
-  value = kubernetes_namespace_v1.this.metadata[0].name
+  value = module.contador.namespace
 }
 
 output "url" {
-  description = "URL local (el clúster publica el NodePort en el host)"
-  value       = "http://localhost:${var.node_port == 30080 ? 8080 : 8081}"
+  description = "URL local: el clúster publica el NodePort 300xx en el puerto 80xx del host"
+  value       = "http://localhost:${var.node_port - 22000}"
 }
 
 output "replicas" {
-  value = kubernetes_deployment_v1.app.spec[0].replicas
+  value = module.contador.replicas
 }

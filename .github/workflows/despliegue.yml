@@ -21,7 +21,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Sintaxis de la app y los scripts
         run: |
-          for f in app/server.js lambda/*.js; do node --check "$f"; done
+          for f in app/*.js; do node --check "$f"; done
+          sh -n app/run.sh
           bash -n scripts/*.sh
       - name: terraform fmt
         run: scripts/tf.sh dev fmt -check -diff -recursive
@@ -45,10 +46,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Pruebas de la Lambda (DynamoDB y Bedrock simulados)
-        run: |
-          node --test lambda/logica.test.js | tee lambda.txt
-          { echo "## Lambda (mock)"; echo '```'; grep -E '^# (tests|pass|fail)' lambda.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: terraform test con AWS simulado
         run: |
           scripts/tf.sh aws init -input=false

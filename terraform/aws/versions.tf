@@ -1,5 +1,6 @@
 terraform {
-  required_version = ">= 1.7" # mock_provider en terraform test
+  # mock_provider en terraform test (1.7) y validaciones entre variables (1.9)
+  required_version = ">= 1.9"
 
   required_providers {
     aws = {
@@ -9,6 +10,10 @@ terraform {
     archive = {
       source  = "hashicorp/archive"
       version = "~> 2.6"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
     }
   }
 }

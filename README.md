@@ -8,21 +8,21 @@ Todo corre en contenedores con **podman**: el clúster (k3s en un contenedor), T
 (`hashicorp/terraform`), Helm (`alpine/helm`) y la construcción de la imagen. Aparte de
 podman, sólo hace falta `kubectl` para la vía de manifiestos.
 
-La misma app se despliega de **tres formas**, para comparar:
+La misma app se despliega de **tres formas** en Kubernetes y de **dos** en AWS, para comparar:
 
 | Vía | Dónde | dev | prod |
 |---|---|---|---|
 | **Terraform** | `terraform/` (+ `modules/contador`) | :8080 | :8081 |
 | **Manifiestos + kustomize** | `k8s/base`, `k8s/dev`, `k8s/prod` | :8082 | :8083 |
 | **Helm** | `helm/contador` + `values-{dev,prod}.yaml` | :8084 | :8085 |
-| **Terraform en AWS, serverless (mock)** | `terraform/aws` + `lambda/`: API Gateway → Lambda → DynamoDB, Bedrock | — | — |
+| **AWS PaaS (mock)** | `terraform/aws`: **Elastic Beanstalk** (ALB → EC2) → ElastiCache | — | — |
+| **AWS serverless (mock)** | `terraform/aws`: **API Gateway → Lambda** → la misma ElastiCache | — | — |
 
 ```
-app/                 servidor Node (sin dependencias) + Dockerfile
-lambda/              el mismo contador como función Lambda (DynamoDB + Bedrock) y sus pruebas
+app/                 servidor Node (sin dependencias) + Dockerfile + run.sh (arranque en Lambda)
 terraform/           raíz local: un workspace por entorno, dev.tfvars / prod.tfvars
   modules/contador/  namespace, Secret, Redis, Deployment, Service
-  aws/               API Gateway, Lambda, DynamoDB, IAM, CloudWatch; tests/ con proveedores mock
+  aws/               VPC, ElastiCache, Elastic Beanstalk, Lambda + API Gateway; tests/ con mocks
 k8s/                 YAML "a pelo" y overlays de kustomize
 helm/contador/       chart con plantillas, helm test y NOTES
 scripts/             cluster.sh, tf.sh, helm.sh, probar.sh, diagnostico.sh
@@ -40,7 +40,7 @@ make imagen             # construye localhost/contador:v1 y la carga en el clús
 make dev prod           # vía Terraform        → localhost:8080 y :8081
 make yaml-dev yaml-prod # vía kubectl -k       → :8082 y :8083
 make helm-dev helm-prod # vía Helm             → :8084 y :8085
-make aws-test           # Lambda y Terraform contra AWS simulado (sin cuenta)
+make aws-test           # Terraform de AWS contra AWS simulado (sin cuenta)
 make help               # todos los objetivos
 ```
 
@@ -63,54 +63,65 @@ Al terminar: `make borrar` (se lleva todo el clúster por delante).
 >
 > Alternativa sin tocar eso: anteponer `MOTOR="sudo podman"` a los `make`.
 
-## AWS serverless, todo simulado
+## AWS, todo simulado: PaaS y serverless
 
-En AWS no se monta un clúster: el mismo contador se reparte entre **servicios gestionados**,
-y cada pieza de Kubernetes tiene su equivalente:
+El **mismo `app/`**, sin cambiar una línea, se despliega en AWS de dos maneras a la vez,
+y las dos comparten Redis gestionado, así que el contador es uno solo:
 
-| En Kubernetes | En AWS | Fichero |
+```
+                 ┌─▶ ALB ─▶ Elastic Beanstalk (EC2, Node.js 22) ─┐
+navegador ───────┤                                                ├─▶ ElastiCache (Redis, TLS)
+                 └─▶ API Gateway ─▶ Lambda (+ Web Adapter) ───────┘
+```
+
+`/stats` en cualquiera de las dos URL muestra los "pods" de ambas: los nombres de las
+instancias EC2 (`ip-10-20-…`) y los de cada copia de la Lambda.
+
+| En Kubernetes | Elastic Beanstalk (PaaS) | Lambda (serverless) |
 |---|---|---|
-| Service NodePort | **API Gateway** (HTTP API) con 4 rutas | `terraform/aws/api.tf` |
-| Deployment + pods | **Lambda** (`nodejs22.x`, arm64); cada copia caliente tiene su color | `lambda.tf`, `lambda/` |
-| `replicas` | `reserved_concurrent_executions` (tope de copias simultáneas) | `lambda.tf` |
-| Redis + Secret | **DynamoDB** bajo demanda; sin contraseña: la Lambda entra por **IAM** | `dynamodb.tf` |
-| `kubectl logs` | **CloudWatch Logs** con retención por entorno | `lambda.tf` |
-| — | **Bedrock**: Claude escribe una frase para cada visita | `lambda/index.js` |
+| imagen de contenedor | zip de `app/` en S3, *application version* | el mismo zip |
+| cómo arranca | `npm start` (plataforma Node.js 22) | `run.sh`, vía la capa **Lambda Web Adapter** |
+| Deployment + pods | instancias EC2 en un Auto Scaling Group | copias calientes de la función |
+| `replicas` | `MinSize` / `MaxSize` | `reserved_concurrent_executions` (tope) |
+| Service NodePort | **Application Load Balancer** | **API Gateway** (HTTP API) |
+| `readinessProbe` `/readyz` | `HealthCheckPath=/readyz` del balanceador | `AWS_LWA_READINESS_CHECK_PATH` |
+| RollingUpdate | `DeploymentPolicy=Rolling`, lotes de 1 | cada versión sustituye a la anterior |
+| Redis + Secret | **ElastiCache** con `auth_token` y TLS | la misma |
+| `kubectl logs` | CloudWatch Logs (`StreamLogs`) | CloudWatch Logs |
 
-```
-navegador ─▶ API Gateway ─▶ Lambda ─┬─▶ DynamoDB   (ADD n :1 → visitas, instancia#…)
-                                     └─▶ Bedrock    (Claude: frase de la visita)
-```
+Ficheros en `terraform/aws/`:
 
-- `lambda/logica.js` es la lógica y no tiene dependencias: recibe los clientes de
-  DynamoDB y Bedrock ya creados. `lambda/index.js` crea los de verdad: DynamoDB con el
-  AWS SDK que trae el runtime, y Bedrock con el SDK oficial de Anthropic
-  (`@anthropic-ai/bedrock-sdk`). Si Bedrock falla o tarda más de 8 s, la página sale
-  igual, sin la frase.
-- dev y prod comparten plantillas y cambian en `dev.tfvars` y `prod.tfvars`: memoria,
-  tope de copias, retención de logs, copias continuas de la tabla y throttling de la API.
-- `modelo_bedrock = ""` quita Bedrock: desaparecen el permiso IAM y la llamada.
+- `main.tf`: el zip de `app/` (sin el Dockerfile), que usan los dos.
+- `red.tf`: VPC con dos zonas; subredes públicas para Beanstalk, privadas para Redis y
+  la Lambda. Security groups: Redis sólo acepta el 6379 desde Beanstalk y la Lambda.
+- `elasticache.tf`: *replication group* de Redis 7. En dev, un nodo; en prod, primario
+  + réplica en otra zona con failover automático y copias diarias.
+- `beanstalk.tf`: bucket S3 con las versiones, aplicación, entorno y roles IAM.
+- `lambda.tf`: la función en la VPC, con la capa Web Adapter, y API Gateway delante.
 
-`make aws-test` lo prueba **sin cuenta ni credenciales**, en dos niveles:
+Las diferencias entre dev y prod están en `dev.tfvars` y `prod.tfvars`: instancias, tipos
+de máquina, nodos de Redis, memoria y tope de la Lambda, y retención de logs.
 
-1. `node --test lambda/logica.test.js`: la Lambda con DynamoDB y Bedrock falsos. Comprueba el recuento
-   por instancia, que la frase sale escapada en el HTML, que un fallo de Bedrock no rompe
-   la página y que un fallo de DynamoDB da 503.
-2. `terraform test` con `mock_provider` para `aws` y `archive`: Terraform hace *plan* y
-   *apply* de verdad, pero los recursos sólo existen en memoria. Las pruebas
-   (`aws/tests/mock.tftest.hcl`) comprueban las rutas, el tope de copias en dev, PITR y
-   retención en prod, que el permiso de Bedrock sólo aparece si hay modelo y que un
-   entorno inválido se rechaza.
+Un detalle: ElastiCache sólo admite contraseña con cifrado en tránsito, así que la app
+se conecta por TLS cuando lleva `REDIS_TLS=1` (`app/redis.js`). Para simplificar, la
+contraseña va en las variables de entorno; en un proyecto real se leería de Secrets Manager.
 
-Para desplegarlo de verdad (no lo hace el CI): `make lambda` instala las dependencias en
-`lambda/node_modules` con un contenedor de Node. Después,
-`scripts/tf.sh aws apply -var-file=dev.tfvars` con credenciales de AWS y el modelo
-habilitado en Bedrock.
+`make aws-test` lo prueba **sin cuenta ni credenciales**: `terraform test` con
+`mock_provider` para `aws` y `archive` hace *plan* y *apply* de verdad, pero los
+recursos sólo existen en memoria. Las pruebas (`aws/tests/mock.tftest.hcl`) comprueban
+que Beanstalk y Lambda despliegan el mismo paquete y apuntan al mismo Redis, el health
+check, el despliegue por lotes, TLS, el failover en prod, las subredes y que se
+rechazan un entorno inválido y un `instancias_min` mayor que el máximo.
+
+Para desplegarlo de verdad (no lo hace el CI): `scripts/tf.sh aws apply -var-file=dev.tfvars`
+con credenciales de AWS. Tarda unos 15 minutos, casi todos en ElastiCache y Beanstalk, y
+**cuesta dinero** mientras exista (EC2, ALB y ElastiCache): al acabar,
+`scripts/tf.sh aws destroy -var-file=dev.tfvars`.
 
 ## En GitHub Actions
 
 Cada push a `main` valida todo (`fmt`, `validate`, `helm lint`, `kustomize build`),
-pasa las pruebas de la Lambda y de AWS en mock y, en paralelo, levanta clústeres k3s dentro del runner
+pasa las pruebas de AWS en mock y, en paralelo, levanta clústeres k3s dentro del runner
 (sin cuenta en la nube): uno por cada vía alternativa (yaml y helm: instalar, probar,
 actualizar con Helm, desinstalar) y otro por entorno para Terraform:
 

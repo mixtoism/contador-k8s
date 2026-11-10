@@ -3,7 +3,7 @@ export MOTOR ?= podman
 TAG ?= v1
 KUBECTL = kubectl --kubeconfig kubeconfig
 
-.PHONY: help cluster imagen borrar init dev prod fmt aws-test lambda \
+.PHONY: help cluster imagen borrar init dev prod fmt aws-test \
         yaml-dev yaml-prod helm-dev helm-prod
 
 help:  ## Muestra esta ayuda
@@ -45,12 +45,6 @@ quitar-helm-%:  ## helm uninstall
 	$(KUBECTL) delete namespace contador-helm-$*
 
 # ---- Alternativa en AWS, todo simulado (terraform/aws) ----
-aws-test:  ## Pruebas de la Lambda y terraform test con AWS simulado (sin cuenta)
-	$(MOTOR) run --rm --security-opt label=disable -v "$(CURDIR)/lambda:/l:ro" -w /l \
-	  docker.io/library/node:22-alpine node --test
+aws-test:  ## terraform test de Beanstalk + Lambda + ElastiCache con AWS simulado (sin cuenta)
 	scripts/tf.sh aws init -input=false
 	scripts/tf.sh aws test
-
-lambda:  ## Instala las dependencias de la Lambda (sólo para desplegar de verdad)
-	$(MOTOR) run --rm --security-opt label=disable -v "$(CURDIR)/lambda:/l" -w /l \
-	  docker.io/library/node:22-alpine npm ci --omit=dev

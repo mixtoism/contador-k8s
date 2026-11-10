@@ -1,0 +1,108 @@
+name: despliegue
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # En el runner, podman rootful: el rootless no tiene el cgroup cpuset delegado.
+  MOTOR: sudo podman
+  TF_IN_AUTOMATION: "1"
+
+jobs:
+  validar:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sintaxis de la app
+        run: node --check app/server.js
+      - name: terraform fmt
+        run: scripts/tf.sh dev fmt -check -diff -recursive
+      - name: terraform init
+        run: scripts/tf.sh dev init -input=false -backend=false
+      - name: terraform validate
+        run: scripts/tf.sh dev validate -no-color
+
+  desplegar:
+    needs: validar
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - entorno: dev
+            puerto: 8080
+          - entorno: prod
+            puerto: 8081
+    env:
+      E: ${{ matrix.entorno }}
+      URL: http://localhost:${{ matrix.puerto }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Crear clúster k3s
+        run: scripts/cluster.sh crear
+
+      - name: Construir y cargar la imagen (v1 y v2)
+        run: |
+          scripts/cluster.sh cargar v1
+          scripts/cluster.sh cargar v2
+
+      - name: terraform init
+        run: scripts/tf.sh "$E" init -input=false
+
+      - name: "Fase 1: instalar"
+        run: |
+          fase() {  # fase <título> <args de terraform...>
+            local titulo=$1; shift
+            scripts/tf.sh "$E" "$@" -auto-approve -input=false -no-color | tee salida.txt
+            { echo "### $titulo"; echo '```'; grep -E '^(Plan:|No changes|Destroy complete)' salida.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          }
+          declare -f fase > fase.sh
+          echo "## Entorno \`$E\`" >> "$GITHUB_STEP_SUMMARY"
+          fase "1 · Instalar" apply -var imagen=localhost/contador:v1
+          scripts/probar.sh "$URL" 30 | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: "Fase 2: actualizar a v2 (rolling update)"
+        run: |
+          source fase.sh
+          fase "2 · Actualizar" apply -var imagen=localhost/contador:v2 -var version_app=v2
+          scripts/probar.sh "$URL" 30 | tee -a "$GITHUB_STEP_SUMMARY"
+          curl -fs "$URL/api" | jq -e '.version == "v2"'
+
+      - name: "Fase 3: escalar a 5 réplicas"
+        run: |
+          source fase.sh
+          fase "3 · Escalar" apply -var imagen=localhost/contador:v2 -var version_app=v2 -var replicas=5
+          scripts/probar.sh "$URL" 50 | tee -a "$GITHUB_STEP_SUMMARY"
+          test "$(curl -fs "$URL/stats" | jq '.pods | length')" -ge 5
+
+      - name: "Extra: Terraform detecta un cambio hecho a mano (drift)"
+        run: |
+          $MOTOR exec contador-k3s kubectl -n "contador-$E" scale deployment/contador --replicas=1
+          set +e
+          scripts/tf.sh "$E" plan -detailed-exitcode -input=false -no-color \
+            -var imagen=localhost/contador:v2 -var version_app=v2 -var replicas=5 | tee salida.txt
+          codigo=${PIPESTATUS[0]}
+          set -e
+          { echo "### Drift (kubectl scale a 1)"; echo '```'; grep -E 'replicas|^Plan:' salida.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          test "$codigo" -eq 2   # 2 = hay diferencias
+
+      - name: "Fase 4: eliminar"
+        run: |
+          source fase.sh
+          fase "4 · Eliminar" destroy
+          ! $MOTOR exec contador-k3s kubectl get namespace "contador-$E"
+
+      - name: Estado del clúster si algo falla
+        if: failure()
+        run: $MOTOR exec contador-k3s kubectl get all,events -A || true
+
+      - name: Borrar clúster
+        if: always()
+        run: scripts/cluster.sh borrar

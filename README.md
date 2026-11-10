@@ -15,13 +15,14 @@ La misma app se despliega de **tres formas**, para comparar:
 | **Terraform** | `terraform/` (+ `modules/contador`) | :8080 | :8081 |
 | **Manifiestos + kustomize** | `k8s/base`, `k8s/dev`, `k8s/prod` | :8082 | :8083 |
 | **Helm** | `helm/contador` + `values-{dev,prod}.yaml` | :8084 | :8085 |
-| **Terraform en AWS (mock)** | `terraform/aws`: VPC + EKS + ECR | — | — |
+| **Terraform en AWS, serverless (mock)** | `terraform/aws` + `lambda/`: API Gateway → Lambda → DynamoDB, Bedrock | — | — |
 
 ```
 app/                 servidor Node (sin dependencias) + Dockerfile
+lambda/              el mismo contador como función Lambda (DynamoDB + Bedrock) y sus pruebas
 terraform/           raíz local: un workspace por entorno, dev.tfvars / prod.tfvars
-  modules/contador/  namespace, Secret, Redis, Deployment, Service (lo usan local y aws)
-  aws/               VPC, IAM, EKS, ECR + el mismo módulo; tests/ con proveedores mock
+  modules/contador/  namespace, Secret, Redis, Deployment, Service
+  aws/               API Gateway, Lambda, DynamoDB, IAM, CloudWatch; tests/ con proveedores mock
 k8s/                 YAML "a pelo" y overlays de kustomize
 helm/contador/       chart con plantillas, helm test y NOTES
 scripts/             cluster.sh, tf.sh, helm.sh, probar.sh, diagnostico.sh
@@ -39,7 +40,7 @@ make imagen             # construye localhost/contador:v1 y la carga en el clús
 make dev prod           # vía Terraform        → localhost:8080 y :8081
 make yaml-dev yaml-prod # vía kubectl -k       → :8082 y :8083
 make helm-dev helm-prod # vía Helm             → :8084 y :8085
-make aws-test           # Terraform contra AWS simulado (sin cuenta)
+make aws-test           # Lambda y Terraform contra AWS simulado (sin cuenta)
 make help               # todos los objetivos
 ```
 
@@ -62,23 +63,54 @@ Al terminar: `make borrar` (se lleva todo el clúster por delante).
 >
 > Alternativa sin tocar eso: anteponer `MOTOR="sudo podman"` a los `make`.
 
-## AWS, todo simulado
+## AWS serverless, todo simulado
 
-`terraform/aws` describe un despliegue real en AWS: VPC con dos subredes, roles IAM,
-clúster **EKS** con grupo de nodos, repositorio **ECR**, y el mismo módulo `contador`
-con el Service como `LoadBalancer`. Lo único que cambia respecto a local es de dónde
-salen el clúster y la imagen.
+En AWS no se monta un clúster: el mismo contador se reparte entre **servicios gestionados**,
+y cada pieza de Kubernetes tiene su equivalente:
 
-`make aws-test` lo ejecuta con `terraform test` y `mock_provider` para `aws`,
-`kubernetes` y `random`: Terraform hace *plan* y *apply* de verdad, pero los recursos
-sólo existen en memoria. No hace falta cuenta, credenciales ni red hacia AWS. Las pruebas
-(`aws/tests/mock.tftest.hcl`) comprueban subredes, nodos, réplicas, que la imagen sale
-de ECR y que un entorno inválido se rechaza.
+| En Kubernetes | En AWS | Fichero |
+|---|---|---|
+| Service NodePort | **API Gateway** (HTTP API) con 4 rutas | `terraform/aws/api.tf` |
+| Deployment + pods | **Lambda** (`nodejs22.x`, arm64); cada copia caliente tiene su color | `lambda.tf`, `lambda/` |
+| `replicas` | `reserved_concurrent_executions` (tope de copias simultáneas) | `lambda.tf` |
+| Redis + Secret | **DynamoDB** bajo demanda; sin contraseña: la Lambda entra por **IAM** | `dynamodb.tf` |
+| `kubectl logs` | **CloudWatch Logs** con retención por entorno | `lambda.tf` |
+| — | **Bedrock**: Claude escribe una frase para cada visita | `lambda/index.js` |
+
+```
+navegador ─▶ API Gateway ─▶ Lambda ─┬─▶ DynamoDB   (ADD n :1 → visitas, instancia#…)
+                                     └─▶ Bedrock    (Claude: frase de la visita)
+```
+
+- `lambda/logica.js` es la lógica y no tiene dependencias: recibe los clientes de
+  DynamoDB y Bedrock ya creados. `lambda/index.js` crea los de verdad: DynamoDB con el
+  AWS SDK que trae el runtime, y Bedrock con el SDK oficial de Anthropic
+  (`@anthropic-ai/bedrock-sdk`). Si Bedrock falla o tarda más de 8 s, la página sale
+  igual, sin la frase.
+- dev y prod comparten plantillas y cambian en `dev.tfvars` y `prod.tfvars`: memoria,
+  tope de copias, retención de logs, copias continuas de la tabla y throttling de la API.
+- `modelo_bedrock = ""` quita Bedrock: desaparecen el permiso IAM y la llamada.
+
+`make aws-test` lo prueba **sin cuenta ni credenciales**, en dos niveles:
+
+1. `node --test lambda/logica.test.js`: la Lambda con DynamoDB y Bedrock falsos. Comprueba el recuento
+   por instancia, que la frase sale escapada en el HTML, que un fallo de Bedrock no rompe
+   la página y que un fallo de DynamoDB da 503.
+2. `terraform test` con `mock_provider` para `aws` y `archive`: Terraform hace *plan* y
+   *apply* de verdad, pero los recursos sólo existen en memoria. Las pruebas
+   (`aws/tests/mock.tftest.hcl`) comprueban las rutas, el tope de copias en dev, PITR y
+   retención en prod, que el permiso de Bedrock sólo aparece si hay modelo y que un
+   entorno inválido se rechaza.
+
+Para desplegarlo de verdad (no lo hace el CI): `make lambda` instala las dependencias en
+`lambda/node_modules` con un contenedor de Node. Después,
+`scripts/tf.sh aws apply -var-file=dev.tfvars` con credenciales de AWS y el modelo
+habilitado en Bedrock.
 
 ## En GitHub Actions
 
 Cada push a `main` valida todo (`fmt`, `validate`, `helm lint`, `kustomize build`),
-pasa las pruebas de AWS en mock y, en paralelo, levanta clústeres k3s dentro del runner
+pasa las pruebas de la Lambda y de AWS en mock y, en paralelo, levanta clústeres k3s dentro del runner
 (sin cuenta en la nube): uno por cada vía alternativa (yaml y helm: instalar, probar,
 actualizar con Helm, desinstalar) y otro por entorno para Terraform:
 

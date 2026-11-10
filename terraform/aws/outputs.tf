@@ -1,24 +1,24 @@
-output "cluster" {
-  value = aws_eks_cluster.this.name
+output "url" {
+  description = "La página del contador"
+  value       = aws_apigatewayv2_stage.defecto.invoke_url
 }
 
-output "endpoint" {
-  value = aws_eks_cluster.this.endpoint
+output "funcion" {
+  value = aws_lambda_function.contador.function_name
 }
 
-output "ecr" {
-  description = "Dónde subir la imagen: podman push <imagen> <ecr>:<versión>"
-  value       = aws_ecr_repository.contador.repository_url
+output "tabla" {
+  value = aws_dynamodb_table.contador.name
 }
 
-output "imagen" {
-  value = module.contador.imagen
+output "bedrock" {
+  value = local.con_ia ? var.modelo_bedrock : "desactivado"
 }
 
-output "replicas" {
-  value = module.contador.replicas
+output "rutas" {
+  value = sort(keys(aws_apigatewayv2_route.rutas))
 }
 
-output "kubeconfig" {
-  value = "aws eks update-kubeconfig --region ${var.region} --name ${aws_eks_cluster.this.name}"
+output "logs" {
+  value = "aws logs tail ${aws_cloudwatch_log_group.lambda.name} --follow"
 }

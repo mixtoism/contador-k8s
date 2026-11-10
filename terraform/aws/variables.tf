@@ -3,12 +3,6 @@ variable "region" {
   default = "eu-west-1"
 }
 
-variable "zonas" {
-  description = "Zonas de disponibilidad (EKS exige al menos dos)"
-  type        = list(string)
-  default     = ["eu-west-1a", "eu-west-1b"]
-}
-
 variable "entorno" {
   type = string
 
@@ -18,23 +12,31 @@ variable "entorno" {
   }
 }
 
-variable "replicas" {
-  type    = number
-  default = 1
-}
-
-variable "nodos" {
-  description = "Número de nodos EC2 del clúster"
-  type        = number
-  default     = 2
-}
-
-variable "tipo_instancia" {
-  type    = string
-  default = "t3.small"
-}
-
 variable "version_app" {
   type    = string
   default = "v1"
+}
+
+variable "memoria" {
+  description = "MB de memoria de la Lambda (la CPU escala con ella)"
+  type        = number
+  default     = 256
+}
+
+variable "concurrencia_maxima" {
+  description = "Tope de copias simultáneas de la Lambda (el equivalente a las réplicas); null = sin tope"
+  type        = number
+  default     = null
+}
+
+variable "modelo_bedrock" {
+  description = "Modelo de Claude en Bedrock para la frase de cada visita; \"\" = sin Bedrock"
+  type        = string
+  default     = "anthropic.claude-opus-5-5"
+}
+
+variable "retencion_logs" {
+  description = "Días que CloudWatch guarda los logs"
+  type        = number
+  default     = 7
 }

@@ -7,7 +7,8 @@ const os = require('os');
 
 const PORT = Number(process.env.PORT || 8080);
 const REDIS_HOST = process.env.REDIS_HOST || '127.0.0.1';
-const REDIS_PORT = Number(process.env.REDIS_PORT || 6379);
+// Si llega algo como "tcp://10.43.0.5:6379" (service links de Kubernetes), se ignora.
+const REDIS_PORT = Number(process.env.REDIS_PORT) || 6379;
 const REDIS_PASSWORD = process.env.REDIS_PASSWORD || '';
 const ENTORNO = process.env.ENTORNO || 'local';
 const VERSION = process.env.APP_VERSION || 'v1';

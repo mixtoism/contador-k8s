@@ -11,6 +11,11 @@ cmd=${1:?falta el comando de terraform}; shift
 dir=/w/terraform extra=() vars=()
 if [ "$destino" = aws ]; then
   dir=/w/terraform/aws
+  # Sólo para un despliegue real: pasa las credenciales de AWS si existen.
+  for v in AWS_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION; do
+    [ -n "${!v:-}" ] && vars+=(-e "$v")
+  done
+  [ -d "$HOME/.aws" ] && vars+=(-v "$HOME/.aws:/root/.aws:ro")
 else
   vars=(-e TF_WORKSPACE="$destino")
   case "$cmd" in plan|apply|destroy) extra=(-var-file="$destino.tfvars") ;; esac

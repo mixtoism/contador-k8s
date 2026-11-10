@@ -1,3 +1,3 @@
-entorno  = "dev"
-replicas = 1
-nodos    = 1
+entorno             = "dev"
+memoria             = 128
+concurrencia_maxima = 2

@@ -5,3 +5,6 @@ kubeconfig
 **/*.tfplan
 salida.txt
 fase.sh
+**/.build/
+lambda/node_modules/
+lambda.txt

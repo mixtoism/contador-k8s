@@ -17,6 +17,8 @@ spec:
         {{- include "contador.etiquetas" . | nindent 8 }}
     spec:
       terminationGracePeriodSeconds: 10
+      # Sin esto, un Service "redis" mete REDIS_PORT=tcp://… en el pod y pisa la nuestra.
+      enableServiceLinks: false
       containers:
         - name: contador
           image: "{{ .Values.imagen.repositorio }}:{{ include "contador.version" . }}"

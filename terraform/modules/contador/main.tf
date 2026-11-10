@@ -136,6 +136,8 @@ resource "kubernetes_deployment_v1" "app" {
       }
       spec {
         termination_grace_period_seconds = 10
+        # Sin esto, el Service "redis" mete REDIS_PORT=tcp://… en el pod y pisa la nuestra.
+        enable_service_links = false
 
         container {
           name              = "contador"

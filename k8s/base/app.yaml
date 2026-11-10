@@ -14,6 +14,8 @@ spec:
       labels: { app: contador }
     spec:
       terminationGracePeriodSeconds: 10
+      # Sin esto, un Service "redis" mete REDIS_PORT=tcp://… en el pod y pisa la nuestra.
+      enableServiceLinks: false
       containers:
         - name: contador
           image: localhost/contador:v1

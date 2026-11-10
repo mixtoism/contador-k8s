@@ -6,13 +6,9 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.70"
     }
-    kubernetes = {
-      source  = "hashicorp/kubernetes"
-      version = "~> 2.33"
-    }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.6"
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.6"
     }
   }
 }
@@ -26,12 +22,4 @@ provider "aws" {
       Entorno  = var.entorno
     }
   }
-}
-
-# El proveedor de Kubernetes se configura con los datos del clúster EKS que
-# crea este mismo código.
-provider "kubernetes" {
-  host                   = aws_eks_cluster.this.endpoint
-  cluster_ca_certificate = base64decode(aws_eks_cluster.this.certificate_authority[0].data)
-  token                  = data.aws_eks_cluster_auth.this.token
 }

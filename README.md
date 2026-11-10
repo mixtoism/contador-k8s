@@ -113,10 +113,22 @@ que Beanstalk y Lambda despliegan el mismo paquete y apuntan al mismo Redis, el 
 check, el despliegue por lotes, TLS, el failover en prod, las subredes y que se
 rechazan un entorno inválido y un `instancias_min` mayor que el máximo.
 
-Para desplegarlo de verdad (no lo hace el CI): `scripts/tf.sh aws apply -var-file=dev.tfvars`
-con credenciales de AWS. Tarda unos 15 minutos, casi todos en ElastiCache y Beanstalk, y
-**cuesta dinero** mientras exista (EC2, ALB y ElastiCache): al acabar,
-`scripts/tf.sh aws destroy -var-file=dev.tfvars`.
+### Desplegarlo de verdad
+
+El CI no lo hace. Hace falta el CLI `aws` con sesión iniciada (`aws login`, `aws sso login`
+o claves); `scripts/tf.sh` le pide credenciales temporales y se las pasa al contenedor.
+
+```sh
+aws sts get-caller-identity   # comprobar la cuenta
+make aws-dev                  # init + apply de dev (pide confirmación); ~15 min
+make quitar-aws-dev           # destruirlo al acabar
+```
+
+Cada entorno tiene su workspace (`aws-dev`, `aws-prod`), así que pueden convivir.
+Comandos sueltos: `scripts/tf.sh aws-dev plan`, `scripts/tf.sh aws-dev output`.
+**Cuesta dinero** mientras exista (EC2, ALB y ElastiCache): no olvides el `quitar-aws-*`.
+El estado queda en local (`terraform/aws/terraform.tfstate.d/`); no lo borres antes de
+destruir, o habrá que borrar los recursos a mano.
 
 ## En GitHub Actions
 

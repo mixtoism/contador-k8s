@@ -23,8 +23,9 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Proyecto = "contador-k8s"
-      Entorno  = var.entorno
+      Proyecto   = "contador-k8s"
+      Entorno    = var.entorno
+      Plataforma = var.plataforma
     }
   }
 }

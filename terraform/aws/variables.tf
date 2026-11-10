@@ -12,6 +12,16 @@ variable "entorno" {
   }
 }
 
+variable "plataforma" {
+  description = "Dónde corre la app: beanstalk (PaaS) o lambda (serverless)"
+  type        = string
+
+  validation {
+    condition     = contains(["beanstalk", "lambda"], var.plataforma)
+    error_message = "La plataforma debe ser beanstalk o lambda."
+  }
+}
+
 variable "version_app" {
   type    = string
   default = "v1"

@@ -3,7 +3,7 @@ export MOTOR ?= podman
 TAG ?= v1
 KUBECTL = kubectl --kubeconfig kubeconfig
 
-.PHONY: help cluster imagen borrar init dev prod fmt aws-test aws-dev aws-prod \
+.PHONY: help cluster imagen borrar fmt aws-test $(KUBE) $(AWS) \
         yaml-dev yaml-prod helm-dev helm-prod
 
 help:  ## Muestra esta ayuda
@@ -16,17 +16,29 @@ imagen:  ## Construye la imagen y la carga en el clúster (TAG=v1)
 borrar:  ## Elimina el clúster
 	scripts/cluster.sh borrar
 
-# ---- Vía 1: Terraform (terraform/) ----
-init:
-	scripts/tf.sh dev init -input=false
-dev prod: init  ## Terraform apply del entorno → :8080 / :8081
-	scripts/tf.sh $@ apply -var imagen=localhost/contador:$(TAG)
-plan-%: init  ## Terraform plan (plan-dev, plan-prod)
-	scripts/tf.sh $* plan -var imagen=localhost/contador:$(TAG)
-destruir-%: init  ## Terraform destroy (destruir-dev, destruir-prod)
+# ---- Entornos con Terraform: un workspace y un .tfvars por entorno ----
+KUBE = dev-kube prod-kube
+AWS  = dev-lambda prod-lambda dev-beanstalk prod-beanstalk
+# La imagen sólo se pasa en los entornos de Kubernetes.
+img = $(if $(filter %-kube,$(1)),-var imagen=localhost/contador:$(TAG))
+
+dev-kube prod-kube:  ## Terraform apply en el clúster local → dev-kube :8080, prod-kube :8081
+	scripts/tf.sh $@ init -input=false
+	scripts/tf.sh $@ apply $(call img,$@)
+dev-lambda prod-lambda dev-beanstalk prod-beanstalk:  ## Terraform apply en AWS DE VERDAD (cuesta dinero; pide confirmación)
+	scripts/tf.sh $@ init -input=false
+	scripts/tf.sh $@ apply
+plan-%:  ## Terraform plan de un entorno (plan-dev-kube, plan-prod-lambda…)
+	scripts/tf.sh $* init -input=false
+	scripts/tf.sh $* plan $(call img,$*)
+destruir-%:  ## Terraform destroy de un entorno (destruir-dev-beanstalk…)
+	scripts/tf.sh $* init -input=false
 	scripts/tf.sh $* destroy
 fmt:
-	scripts/tf.sh dev fmt -recursive
+	scripts/tf.sh kube fmt -recursive
+aws-test:  ## terraform test de los entornos de AWS, simulado (sin cuenta)
+	scripts/tf.sh aws init -input=false
+	scripts/tf.sh aws test
 
 # ---- Vía 2: manifiestos + kustomize (k8s/) ----
 yaml-dev yaml-prod:  ## kubectl apply -k → :8082 / :8083
@@ -43,14 +55,3 @@ helm-dev helm-prod:  ## helm upgrade --install → :8084 / :8085
 quitar-helm-%:  ## helm uninstall
 	scripts/helm.sh uninstall contador -n contador-helm-$* --wait
 	$(KUBECTL) delete namespace contador-helm-$*
-
-# ---- Alternativa en AWS, todo simulado (terraform/aws) ----
-aws-dev aws-prod:  ## Despliegue REAL en AWS (cuesta dinero): Beanstalk + Lambda + ElastiCache
-	scripts/tf.sh $@ init -input=false
-	scripts/tf.sh $@ apply
-quitar-aws-%:  ## Destruye el despliegue real en AWS (quitar-aws-dev, quitar-aws-prod)
-	scripts/tf.sh aws-$* destroy
-
-aws-test:  ## terraform test de Beanstalk + Lambda + ElastiCache con AWS simulado (sin cuenta)
-	scripts/tf.sh aws init -input=false
-	scripts/tf.sh aws test

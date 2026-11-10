@@ -1,6 +1,7 @@
 # terraform test con AWS simulado: no hace falta cuenta ni credenciales.
 # Los proveedores "mock" devuelven valores inventados para lo que AWS calcularía
 # (IDs, ARN, endpoints…); lo que comprobamos es la configuración que se le pediría a AWS.
+# Hay un run por entorno, con las mismas variables que su .tfvars.
 
 mock_provider "aws" {
   mock_data "aws_availability_zones" {
@@ -70,109 +71,125 @@ mock_provider "archive" {
   }
 }
 
-run "plan_dev" {
+run "dev_lambda" {
   command = plan
 
   variables {
     entorno             = "dev"
-    instancias_min      = 1
-    instancias_max      = 2
+    plataforma          = "lambda"
     nodos_cache         = 1
+    memoria_lambda      = 128
     concurrencia_maxima = 2
   }
 
-  # La misma aplicación, el mismo zip, en los dos servicios
   assert {
-    condition     = aws_lambda_function.contador.source_code_hash == data.archive_file.app.output_base64sha256 && aws_s3_object.app.source == data.archive_file.app.output_path
-    error_message = "Beanstalk y Lambda deberían desplegar el mismo paquete de app/"
+    condition     = length(aws_lambda_function.contador) == 1 && length(aws_elastic_beanstalk_environment.this) == 0
+    error_message = "Un entorno lambda debería tener la función y nada de Beanstalk"
   }
   assert {
-    condition     = aws_lambda_function.contador.handler == "run.sh" && aws_lambda_function.contador.environment[0].variables.AWS_LAMBDA_EXEC_WRAPPER == "/opt/bootstrap"
+    condition     = aws_lambda_function.contador[0].function_name == "contador-dev-lambda"
+    error_message = "La función debería llamarse contador-dev-lambda"
+  }
+  assert {
+    condition     = aws_lambda_function.contador[0].handler == "run.sh" && aws_lambda_function.contador[0].environment[0].variables.AWS_LAMBDA_EXEC_WRAPPER == "/opt/bootstrap"
     error_message = "La Lambda debería arrancar server.js a través del Lambda Web Adapter"
   }
-
-  # Beanstalk
   assert {
-    condition     = contains([for s in aws_elastic_beanstalk_environment.this.setting : "${s.name}=${s.value}" if s.namespace == "aws:autoscaling:asg"], "MinSize=1")
-    error_message = "En dev Beanstalk debería tener mínimo 1 instancia"
+    condition     = aws_lambda_function.contador[0].filename == data.archive_file.app.output_path
+    error_message = "La Lambda debería desplegar el zip de app/"
   }
   assert {
-    condition     = contains([for s in aws_elastic_beanstalk_environment.this.setting : "${s.name}=${s.value}"], "HealthCheckPath=/readyz")
-    error_message = "El health check del balanceador debería ser /readyz, como la readinessProbe"
-  }
-  assert {
-    condition     = contains([for s in aws_elastic_beanstalk_environment.this.setting : "${s.name}=${s.value}"], "DeploymentPolicy=Rolling")
-    error_message = "Beanstalk debería desplegar por lotes (Rolling)"
-  }
-
-  # ElastiCache
-  assert {
-    condition     = aws_elasticache_replication_group.this.num_cache_clusters == 1 && !aws_elasticache_replication_group.this.automatic_failover_enabled
-    error_message = "En dev Redis debería ser un único nodo sin failover"
-  }
-  assert {
-    condition     = aws_elasticache_replication_group.this.transit_encryption_enabled
-    error_message = "Redis debería exigir TLS (va con contraseña)"
-  }
-  assert {
-    condition     = aws_lambda_function.contador.environment[0].variables.REDIS_TLS == "1"
-    error_message = "La app debería conectarse a Redis por TLS"
-  }
-
-  # Lambda
-  assert {
-    condition     = aws_lambda_function.contador.reserved_concurrent_executions == 2
+    condition     = aws_lambda_function.contador[0].reserved_concurrent_executions == 2
     error_message = "En dev la Lambda debería tener un tope de 2 copias"
   }
   assert {
     condition     = length(aws_apigatewayv2_route.rutas) == 5
     error_message = "Deberían publicarse 5 rutas"
   }
+  assert {
+    condition     = aws_elasticache_replication_group.this.num_cache_clusters == 1 && !aws_elasticache_replication_group.this.automatic_failover_enabled
+    error_message = "En dev Redis debería ser un único nodo sin failover"
+  }
+  assert {
+    condition     = aws_elasticache_replication_group.this.transit_encryption_enabled && aws_lambda_function.contador[0].environment[0].variables.REDIS_TLS == "1"
+    error_message = "Redis debería exigir TLS (va con contraseña) y la app usarlo"
+  }
 }
 
-run "despliegue_prod" {
+run "dev_beanstalk" {
+  command = plan
+
+  variables {
+    entorno        = "dev"
+    plataforma     = "beanstalk"
+    instancias_min = 1
+    instancias_max = 2
+    nodos_cache    = 1
+  }
+
+  assert {
+    condition     = length(aws_elastic_beanstalk_environment.this) == 1 && length(aws_lambda_function.contador) == 0 && length(aws_apigatewayv2_route.rutas) == 0
+    error_message = "Un entorno beanstalk debería tener Beanstalk y nada de Lambda"
+  }
+  assert {
+    condition     = aws_s3_object.app[0].source == data.archive_file.app.output_path
+    error_message = "Beanstalk debería desplegar el zip de app/"
+  }
+  assert {
+    condition     = contains([for s in aws_elastic_beanstalk_environment.this[0].setting : "${s.name}=${s.value}"], "MinSize=1")
+    error_message = "En dev Beanstalk debería tener mínimo 1 instancia"
+  }
+  assert {
+    condition     = contains([for s in aws_elastic_beanstalk_environment.this[0].setting : "${s.name}=${s.value}"], "HealthCheckPath=/readyz")
+    error_message = "El health check del balanceador debería ser /readyz, como la readinessProbe"
+  }
+  assert {
+    condition     = contains([for s in aws_elastic_beanstalk_environment.this[0].setting : "${s.name}=${s.value}"], "DeploymentPolicy=Rolling")
+    error_message = "Beanstalk debería desplegar por lotes (Rolling)"
+  }
+  assert {
+    condition     = contains([for s in aws_elastic_beanstalk_environment.this[0].setting : "${s.name}=${s.value}"], "REDIS_TLS=1")
+    error_message = "La app en Beanstalk debería conectarse a Redis por TLS"
+  }
+}
+
+run "prod_beanstalk" {
   command = apply
 
   variables {
-    entorno        = "prod"
-    instancias_min = 2
-    instancias_max = 4
-    nodos_cache    = 2
-    memoria_lambda = 512
-    retencion_logs = 30
+    entorno         = "prod"
+    plataforma      = "beanstalk"
+    instancias_min  = 2
+    instancias_max  = 4
+    tipo_instancia  = "t4g.small"
+    nodos_cache     = 2
+    tipo_nodo_cache = "cache.t4g.small"
+    retencion_logs  = 30
   }
 
   assert {
-    condition     = output.url_beanstalk == "http://contador.eu-west-1.elasticbeanstalk.com"
-    error_message = "La URL de Beanstalk debería salir del CNAME del entorno"
+    condition     = output.url == "http://contador.eu-west-1.elasticbeanstalk.com"
+    error_message = "La URL debería salir del CNAME del entorno de Beanstalk"
   }
   assert {
-    condition     = startswith(output.url_lambda, "https://")
-    error_message = "La URL de API Gateway debería ser https"
-  }
-  assert {
-    condition     = aws_elastic_beanstalk_environment.this.solution_stack_name == "64bit Amazon Linux 2023 v6.6.0 running Node.js 22"
+    condition     = aws_elastic_beanstalk_environment.this[0].solution_stack_name == "64bit Amazon Linux 2023 v6.6.0 running Node.js 22"
     error_message = "Beanstalk debería usar la plataforma Node.js 22"
+  }
+  assert {
+    condition     = contains([for s in aws_elastic_beanstalk_environment.this[0].setting : "${s.name}=${s.value}"], "MaxSize=4")
+    error_message = "En prod Beanstalk debería poder escalar hasta 4 instancias"
+  }
+  assert {
+    condition     = contains([for s in aws_elastic_beanstalk_environment.this[0].setting : s.value if s.name == "REDIS_HOST"], aws_elasticache_replication_group.this.primary_endpoint_address)
+    error_message = "Beanstalk debería apuntar al endpoint primario de ElastiCache"
   }
   assert {
     condition     = aws_elasticache_replication_group.this.automatic_failover_enabled && aws_elasticache_replication_group.this.multi_az_enabled
     error_message = "En prod Redis debería tener réplica y failover automático"
   }
   assert {
-    condition     = aws_lambda_function.contador.environment[0].variables.REDIS_HOST == "master.contador.abc123.euw1.cache.amazonaws.com"
-    error_message = "La Lambda debería apuntar al endpoint primario de ElastiCache"
-  }
-  assert {
-    condition     = contains([for s in aws_elastic_beanstalk_environment.this.setting : s.value if s.name == "REDIS_HOST"], aws_elasticache_replication_group.this.primary_endpoint_address)
-    error_message = "Beanstalk debería apuntar al mismo Redis que la Lambda"
-  }
-  assert {
-    condition     = length(aws_lambda_function.contador.vpc_config[0].subnet_ids) == 2
-    error_message = "La Lambda debería estar en las dos subredes privadas para llegar a Redis"
-  }
-  assert {
-    condition     = aws_lambda_function.contador.reserved_concurrent_executions == -1
-    error_message = "En prod la Lambda no debería tener tope de copias"
+    condition     = tolist(aws_security_group.redis.ingress)[0].security_groups == toset([aws_security_group.beanstalk[0].id])
+    error_message = "Redis sólo debería aceptar conexiones de las instancias de Beanstalk"
   }
   assert {
     condition     = length(aws_subnet.publica) == 2 && aws_subnet.publica[0].availability_zone != aws_subnet.publica[1].availability_zone
@@ -180,14 +197,60 @@ run "despliegue_prod" {
   }
 }
 
+run "prod_lambda" {
+  command = apply
+
+  variables {
+    entorno         = "prod"
+    plataforma      = "lambda"
+    nodos_cache     = 2
+    tipo_nodo_cache = "cache.t4g.small"
+    memoria_lambda  = 512
+    retencion_logs  = 30
+  }
+
+  assert {
+    condition     = startswith(output.url, "https://")
+    error_message = "La URL de API Gateway debería ser https"
+  }
+  assert {
+    condition     = length(aws_lambda_function.contador[0].vpc_config[0].subnet_ids) == 2
+    error_message = "La Lambda debería estar en las dos subredes privadas para llegar a Redis"
+  }
+  assert {
+    condition     = aws_lambda_function.contador[0].environment[0].variables.REDIS_HOST == "master.contador.abc123.euw1.cache.amazonaws.com"
+    error_message = "La Lambda debería apuntar al endpoint primario de ElastiCache"
+  }
+  assert {
+    condition     = aws_lambda_function.contador[0].reserved_concurrent_executions == -1
+    error_message = "En prod la Lambda no debería tener tope de copias"
+  }
+  assert {
+    condition     = length(aws_elastic_beanstalk_environment.this) == 0 && length(aws_s3_bucket.versiones) == 0
+    error_message = "Al pasar a lambda no debería quedar nada de Beanstalk"
+  }
+}
+
 run "entorno_invalido" {
   command = plan
 
   variables {
-    entorno = "staging"
+    entorno    = "staging"
+    plataforma = "lambda"
   }
 
   expect_failures = [var.entorno]
+}
+
+run "plataforma_invalida" {
+  command = plan
+
+  variables {
+    entorno    = "dev"
+    plataforma = "ecs"
+  }
+
+  expect_failures = [var.plataforma]
 }
 
 run "escalado_imposible" {
@@ -195,6 +258,7 @@ run "escalado_imposible" {
 
   variables {
     entorno        = "dev"
+    plataforma     = "beanstalk"
     instancias_min = 3
     instancias_max = 2
   }

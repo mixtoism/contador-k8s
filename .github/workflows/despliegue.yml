@@ -25,11 +25,11 @@ jobs:
           sh -n app/run.sh
           bash -n scripts/*.sh
       - name: terraform fmt
-        run: scripts/tf.sh dev fmt -check -diff -recursive
+        run: scripts/tf.sh kube fmt -check -diff -recursive
       - name: terraform validate (local y aws)
         run: |
-          scripts/tf.sh dev init -input=false -backend=false
-          scripts/tf.sh dev validate -no-color
+          scripts/tf.sh kube init -input=false -backend=false
+          scripts/tf.sh kube validate -no-color
           scripts/tf.sh aws init -input=false -backend=false
           scripts/tf.sh aws validate -no-color
       - name: helm lint
@@ -60,12 +60,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - entorno: dev
+          - entorno: dev-kube
+            ns: contador-dev
             puerto: 8080
-          - entorno: prod
+          - entorno: prod-kube
+            ns: contador-prod
             puerto: 8081
     env:
       E: ${{ matrix.entorno }}
+      NS: ${{ matrix.ns }}
       URL: http://localhost:${{ matrix.puerto }}
     steps:
       - uses: actions/checkout@v4
@@ -109,7 +112,7 @@ jobs:
 
       - name: "Extra: Terraform detecta un cambio hecho a mano (drift)"
         run: |
-          $MOTOR exec contador-k3s kubectl -n "contador-$E" scale deployment/contador --replicas=1
+          $MOTOR exec contador-k3s kubectl -n "$NS" scale deployment/contador --replicas=1
           set +e
           scripts/tf.sh "$E" plan -detailed-exitcode -input=false -no-color \
             -var imagen=localhost/contador:v2 -var version_app=v2 -var replicas=5 | tee salida.txt
@@ -122,7 +125,7 @@ jobs:
         run: |
           source fase.sh
           fase "4 · Eliminar" destroy
-          ! $MOTOR exec contador-k3s kubectl get namespace "contador-$E"
+          ! $MOTOR exec contador-k3s kubectl get namespace "$NS"
 
       - name: Estado del clúster si algo falla
         if: failure()

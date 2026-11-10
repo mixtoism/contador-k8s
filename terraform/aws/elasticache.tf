@@ -1,5 +1,4 @@
 # ElastiCache (Redis): el mismo papel que el Deployment "redis" de Kubernetes.
-# Lo comparten Beanstalk y Lambda, así que el contador es uno solo para los dos.
 
 resource "random_password" "redis" {
   length  = 32
@@ -13,7 +12,7 @@ resource "aws_elasticache_subnet_group" "this" {
 
 resource "aws_elasticache_replication_group" "this" {
   replication_group_id = local.nombre
-  description          = "Contador de visitas (${var.entorno})"
+  description          = "Contador de visitas (${var.entorno}, ${var.plataforma})"
   engine               = "redis"
   engine_version       = "7.1"
   parameter_group_name = "default.redis7"

@@ -1,5 +1,5 @@
 # Red: dos zonas, cada una con una subred pública (instancias de Beanstalk y su
-# balanceador) y una privada (ElastiCache y la Lambda). Sin NAT: lo privado sólo
+# balanceador) y una privada (ElastiCache y, si es el caso, la Lambda). Sin NAT: lo privado sólo
 # habla con Redis, y así no hay coste fijo por NAT Gateway.
 
 data "aws_availability_zones" "disponibles" {
@@ -55,6 +55,7 @@ resource "aws_route_table_association" "publica" {
 # ---------- Security groups: quién puede hablar con Redis ----------
 
 resource "aws_security_group" "beanstalk" {
+  count       = local.es_beanstalk ? 1 : 0
   name        = "${local.nombre}-beanstalk"
   description = "Instancias EC2 de Elastic Beanstalk"
   vpc_id      = aws_vpc.this.id
@@ -68,6 +69,7 @@ resource "aws_security_group" "beanstalk" {
 }
 
 resource "aws_security_group" "lambda" {
+  count       = local.es_lambda ? 1 : 0
   name        = "${local.nombre}-lambda"
   description = "Interfaces de red de la Lambda dentro de la VPC"
   vpc_id      = aws_vpc.this.id
@@ -82,14 +84,15 @@ resource "aws_security_group" "lambda" {
 
 resource "aws_security_group" "redis" {
   name        = "${local.nombre}-redis"
-  description = "ElastiCache: sólo acepta 6379 desde Beanstalk y Lambda"
+  description = "ElastiCache: sólo acepta 6379 desde la app"
   vpc_id      = aws_vpc.this.id
 
   ingress {
-    description     = "Redis desde Beanstalk y Lambda"
-    from_port       = 6379
-    to_port         = 6379
-    protocol        = "tcp"
-    security_groups = [aws_security_group.beanstalk.id, aws_security_group.lambda.id]
+    description = "Redis desde la app"
+    from_port   = 6379
+    to_port     = 6379
+    protocol    = "tcp"
+    # [*] con count: la lista tiene el SG que exista (Beanstalk o Lambda).
+    security_groups = concat(aws_security_group.beanstalk[*].id, aws_security_group.lambda[*].id)
   }
 }

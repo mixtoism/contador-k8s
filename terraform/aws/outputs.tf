@@ -1,22 +1,25 @@
-output "url_beanstalk" {
-  description = "El contador en Elastic Beanstalk (ALB → instancias EC2)"
-  value       = "http://${aws_elastic_beanstalk_environment.this.cname}"
-}
+# Sólo existe una de las dos plataformas: concat + one() se queda con la que haya.
 
-output "url_lambda" {
-  description = "El contador en Lambda (API Gateway → función)"
-  value       = aws_apigatewayv2_stage.defecto.invoke_url
-}
-
-output "redis" {
-  description = "Endpoint de ElastiCache que comparten los dos"
-  value       = "${aws_elasticache_replication_group.this.primary_endpoint_address}:6379"
+output "url" {
+  description = "La página del contador"
+  value = one(concat(
+    [for e in aws_elastic_beanstalk_environment.this : "http://${e.cname}"],
+    aws_apigatewayv2_stage.defecto[*].invoke_url,
+  ))
 }
 
 output "plataforma" {
-  value = data.aws_elastic_beanstalk_solution_stack.node.name
+  value = local.es_beanstalk ? "Elastic Beanstalk (${one(data.aws_elastic_beanstalk_solution_stack.node[*].name)})" : "Lambda + API Gateway"
 }
 
-output "logs_lambda" {
-  value = "aws logs tail ${aws_cloudwatch_log_group.lambda.name} --follow"
+output "redis" {
+  description = "Endpoint de ElastiCache"
+  value       = "${aws_elasticache_replication_group.this.primary_endpoint_address}:6379"
+}
+
+output "logs" {
+  value = one(concat(
+    [for e in aws_elastic_beanstalk_environment.this : "aws logs tail /aws/elasticbeanstalk/${e.name}/var/log/web.stdout.log --follow"],
+    [for g in aws_cloudwatch_log_group.lambda : "aws logs tail ${g.name} --follow"],
+  ))
 }

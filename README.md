@@ -8,28 +8,39 @@ Todo corre en contenedores con **podman**: el clúster (k3s en un contenedor), T
 (`hashicorp/terraform`), Helm (`alpine/helm`) y la construcción de la imagen. Aparte de
 podman, sólo hace falta `kubectl` para la vía de manifiestos.
 
-La misma app se despliega de **tres formas** en Kubernetes y de **dos** en AWS, para comparar:
+La misma app se despliega en **seis entornos con Terraform**: cada uno es un workspace
+con su `.tfvars`, y se manejan todos igual (`make <entorno>`, `make plan-<entorno>`,
+`make destruir-<entorno>`):
+
+| Entorno | Dónde | Cómo corre la app | Redis |
+|---|---|---|---|
+| `dev-kube` · `prod-kube` | k3s local → :8080 · :8081 | Deployment de pods (1 · 3 réplicas) | Deployment en el clúster |
+| `dev-beanstalk` · `prod-beanstalk` | AWS (PaaS) | **Elastic Beanstalk**: ALB → EC2 (1-2 · 2-4) | **ElastiCache** (1 · 2 nodos) |
+| `dev-lambda` · `prod-lambda` | AWS (serverless) | **API Gateway → Lambda** (tope 2 · sin tope) | **ElastiCache** (1 · 2 nodos) |
+
+Los de Kubernetes se prueban de verdad, en local y en el CI. Los de AWS se prueban
+**simulados** (`make aws-test`, sin cuenta) y se pueden desplegar de verdad con una cuenta.
+
+En Kubernetes hay además otras **dos vías** de despliegue, para comparar con Terraform:
 
 | Vía | Dónde | dev | prod |
 |---|---|---|---|
-| **Terraform** | `terraform/` (+ `modules/contador`) | :8080 | :8081 |
 | **Manifiestos + kustomize** | `k8s/base`, `k8s/dev`, `k8s/prod` | :8082 | :8083 |
 | **Helm** | `helm/contador` + `values-{dev,prod}.yaml` | :8084 | :8085 |
-| **AWS PaaS (mock)** | `terraform/aws`: **Elastic Beanstalk** (ALB → EC2) → ElastiCache | — | — |
-| **AWS serverless (mock)** | `terraform/aws`: **API Gateway → Lambda** → la misma ElastiCache | — | — |
 
 ```
 app/                 servidor Node (sin dependencias) + Dockerfile + run.sh (arranque en Lambda)
-terraform/           raíz local: un workspace por entorno, dev.tfvars / prod.tfvars
+terraform/           entornos *-kube: dev-kube.tfvars, prod-kube.tfvars
   modules/contador/  namespace, Secret, Redis, Deployment, Service
-  aws/               VPC, ElastiCache, Elastic Beanstalk, Lambda + API Gateway; tests/ con mocks
+  aws/               entornos *-lambda y *-beanstalk: VPC, ElastiCache, Beanstalk, Lambda;
+                     tests/ con mocks
 k8s/                 YAML "a pelo" y overlays de kustomize
 helm/contador/       chart con plantillas, helm test y NOTES
 scripts/             cluster.sh, tf.sh, helm.sh, probar.sh, diagnostico.sh
 .github/workflows/   CI
 ```
 
-En las tres vías, dev y prod son **las mismas plantillas con distintos valores**
+En todos los casos, dev y prod son **las mismas plantillas con distintos valores**
 (`.tfvars`, overlay de kustomize, `values-*.yaml`).
 
 ## En local
@@ -37,17 +48,18 @@ En las tres vías, dev y prod son **las mismas plantillas con distintos valores*
 ```bash
 make cluster            # k3s en podman; deja ./kubeconfig
 make imagen             # construye localhost/contador:v1 y la carga en el clúster
-make dev prod           # vía Terraform        → localhost:8080 y :8081
+make dev-kube prod-kube # Terraform            → localhost:8080 y :8081
 make yaml-dev yaml-prod # vía kubectl -k       → :8082 y :8083
 make helm-dev helm-prod # vía Helm             → :8084 y :8085
-make aws-test           # Terraform de AWS contra AWS simulado (sin cuenta)
+make aws-test           # entornos de AWS, simulados (sin cuenta)
 make help               # todos los objetivos
 ```
 
 Para actualizar: `make imagen TAG=v2` y luego `make helm-prod TAG=v2` (o
-`scripts/tf.sh prod apply -var imagen=localhost/contador:v2 -var version_app=v2`).
+`scripts/tf.sh prod-kube apply -var imagen=localhost/contador:v2 -var version_app=v2`).
 
-Comandos sueltos: `scripts/tf.sh <dev|prod|aws> <comando>`, `scripts/helm.sh <args>`,
+Comandos sueltos: `scripts/tf.sh <entorno> <comando>` (y `kube`/`aws` sin entorno para
+`fmt`, `validate`, `test`), `scripts/helm.sh <args>`,
 y para kubectl `export KUBECONFIG=$PWD/kubeconfig`.
 
 Al terminar: `make borrar` (se lleva todo el clúster por delante).
@@ -63,19 +75,19 @@ Al terminar: `make borrar` (se lleva todo el clúster por delante).
 >
 > Alternativa sin tocar eso: anteponer `MOTOR="sudo podman"` a los `make`.
 
-## AWS, todo simulado: PaaS y serverless
+## AWS: PaaS y serverless
 
-El **mismo `app/`**, sin cambiar una línea, se despliega en AWS de dos maneras a la vez,
-y las dos comparten Redis gestionado, así que el contador es uno solo:
+El **mismo `app/`**, sin cambiar una línea, es lo que se despliega en los entornos de AWS.
+Todos comparten las plantillas de `terraform/aws/`; la variable `plataforma` del `.tfvars`
+decide qué se crea:
 
 ```
-                 ┌─▶ ALB ─▶ Elastic Beanstalk (EC2, Node.js 22) ─┐
-navegador ───────┤                                                ├─▶ ElastiCache (Redis, TLS)
-                 └─▶ API Gateway ─▶ Lambda (+ Web Adapter) ───────┘
+*-beanstalk:  navegador ─▶ ALB ─▶ Elastic Beanstalk (EC2, Node.js 22) ─▶ ElastiCache (Redis, TLS)
+*-lambda:     navegador ─▶ API Gateway ─▶ Lambda (+ Web Adapter) ───────▶ ElastiCache (Redis, TLS)
 ```
 
-`/stats` en cualquiera de las dos URL muestra los "pods" de ambas: los nombres de las
-instancias EC2 (`ip-10-20-…`) y los de cada copia de la Lambda.
+Cada entorno tiene su propia red y su propio ElastiCache, como cada entorno de
+Kubernetes tiene su namespace y su Redis.
 
 | En Kubernetes | Elastic Beanstalk (PaaS) | Lambda (serverless) |
 |---|---|---|
@@ -91,16 +103,18 @@ instancias EC2 (`ip-10-20-…`) y los de cada copia de la Lambda.
 
 Ficheros en `terraform/aws/`:
 
-- `main.tf`: el zip de `app/` (sin el Dockerfile), que usan los dos.
+- `main.tf`: el nombre del entorno, `es_beanstalk` / `es_lambda` y el zip de `app/`.
 - `red.tf`: VPC con dos zonas; subredes públicas para Beanstalk, privadas para Redis y
-  la Lambda. Security groups: Redis sólo acepta el 6379 desde Beanstalk y la Lambda.
+  la Lambda. Security groups: Redis sólo acepta el 6379 desde la app.
 - `elasticache.tf`: *replication group* de Redis 7. En dev, un nodo; en prod, primario
   + réplica en otra zona con failover automático y copias diarias.
 - `beanstalk.tf`: bucket S3 con las versiones, aplicación, entorno y roles IAM.
 - `lambda.tf`: la función en la VPC, con la capa Web Adapter, y API Gateway delante.
+- `dev-beanstalk.tfvars`, `prod-beanstalk.tfvars`, `dev-lambda.tfvars`, `prod-lambda.tfvars`.
 
-Las diferencias entre dev y prod están en `dev.tfvars` y `prod.tfvars`: instancias, tipos
-de máquina, nodos de Redis, memoria y tope de la Lambda, y retención de logs.
+Los recursos de cada plataforma llevan `count = local.es_beanstalk ? 1 : 0` (o
+`es_lambda`): en un entorno de Lambda, Beanstalk existe 0 veces. Por eso se escriben
+`aws_lambda_function.contador[0]`, y por eso `outputs.tf` da una sola `url`, la que exista.
 
 Un detalle: ElastiCache sólo admite contraseña con cifrado en tránsito, así que la app
 se conecta por TLS cuando lleva `REDIS_TLS=1` (`app/redis.js`). Para simplificar, la
@@ -108,10 +122,11 @@ contraseña va en las variables de entorno; en un proyecto real se leería de Se
 
 `make aws-test` lo prueba **sin cuenta ni credenciales**: `terraform test` con
 `mock_provider` para `aws` y `archive` hace *plan* y *apply* de verdad, pero los
-recursos sólo existen en memoria. Las pruebas (`aws/tests/mock.tftest.hcl`) comprueban
-que Beanstalk y Lambda despliegan el mismo paquete y apuntan al mismo Redis, el health
-check, el despliegue por lotes, TLS, el failover en prod, las subredes y que se
-rechazan un entorno inválido y un `instancias_min` mayor que el máximo.
+recursos sólo existen en memoria. Las pruebas (`aws/tests/mock.tftest.hcl`) tienen un
+*run* por entorno y comprueban que cada uno crea sólo su plataforma, el zip de `app/`, el
+health check, el despliegue por lotes, TLS, el failover en prod, que Redis sólo admite a
+la app y que se rechazan un entorno o una plataforma inválidos y un `instancias_min`
+mayor que el máximo.
 
 ### Desplegarlo de verdad
 
@@ -120,13 +135,15 @@ o claves); `scripts/tf.sh` le pide credenciales temporales y se las pasa al cont
 
 ```sh
 aws sts get-caller-identity   # comprobar la cuenta
-make aws-dev                  # init + apply de dev (pide confirmación); ~15 min
-make quitar-aws-dev           # destruirlo al acabar
+make plan-dev-lambda          # qué se crearía, sin crear nada
+make dev-lambda               # init + apply (pide confirmación); ~10-15 min
+scripts/tf.sh dev-lambda output
+make destruir-dev-lambda      # destruirlo al acabar
 ```
 
-Cada entorno tiene su workspace (`aws-dev`, `aws-prod`), así que pueden convivir.
-Comandos sueltos: `scripts/tf.sh aws-dev plan`, `scripts/tf.sh aws-dev output`.
-**Cuesta dinero** mientras exista (EC2, ALB y ElastiCache): no olvides el `quitar-aws-*`.
+Igual con `dev-beanstalk`, `prod-lambda` y `prod-beanstalk`; pueden convivir.
+**Cuesta dinero** mientras exista (ElastiCache siempre; en Beanstalk, también EC2 y el
+ALB): no olvides el `destruir-*`.
 El estado queda en local (`terraform/aws/terraform.tfstate.d/`); no lo borres antes de
 destruir, o habrá que borrar los recursos a mano.
 
@@ -135,7 +152,7 @@ destruir, o habrá que borrar los recursos a mano.
 Cada push a `main` valida todo (`fmt`, `validate`, `helm lint`, `kustomize build`),
 pasa las pruebas de AWS en mock y, en paralelo, levanta clústeres k3s dentro del runner
 (sin cuenta en la nube): uno por cada vía alternativa (yaml y helm: instalar, probar,
-actualizar con Helm, desinstalar) y otro por entorno para Terraform:
+actualizar con Helm, desinstalar) y otro para `dev-kube` y `prod-kube`:
 
 1. **Instalar** — `terraform apply` con v1.
 2. **Actualizar** — v2: rolling update sin cortes (`max_unavailable = 0`).
@@ -150,14 +167,15 @@ cuántas peticiones atendió cada pod. Es lo que conviene proyectar.
 
 1. **Autorreparación**: `kubectl -n contador-prod delete pod -l app=contador --wait=false`
    y recargar: aparecen colores nuevos, el contador sigue (vive en Redis).
-2. **Escalado declarativo**: cambia `replicas` en `prod.tfvars`, `make plan-prod`
-   (`1 to change`) y `make prod`.
+2. **Escalado declarativo**: cambia `replicas` en `prod-kube.tfvars`, `make plan-prod-kube`
+   (`1 to change`) y `make prod-kube`.
 3. **Drift**: `kubectl -n contador-prod scale deploy/contador --replicas=1` y luego
-   `make plan-prod`: Terraform quiere volver a 3.
+   `make plan-prod-kube`: Terraform quiere volver a 3.
 4. **Actualización continua**: en una terminal
    `while sleep 0.2; do curl -s localhost:8081/api; done` y en otra
-   `scripts/tf.sh prod apply -var version_app=v2`: la versión cambia sin errores.
-5. **Mismo código, otro entorno**: `make plan-dev` vs `make plan-prod`.
+   `scripts/tf.sh prod-kube apply -var version_app=v2`: la versión cambia sin errores.
+5. **Mismo código, otro entorno**: `make plan-dev-kube` vs `make plan-prod-kube`; y en
+   AWS, `make plan-dev-lambda` vs `make plan-dev-beanstalk` (con cuenta).
 6. **Secreto generado**: la contraseña de Redis la crea Terraform (`random_password`);
    mira `kubectl -n contador-dev get secret redis -o yaml`… y que también está en el
    `terraform.tfstate`: por eso el estado nunca se sube al repo.

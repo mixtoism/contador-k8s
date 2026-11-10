@@ -107,6 +107,8 @@ jobs:
         run: |
           source fase.sh
           fase "3 · Escalar" apply -var imagen=localhost/contador:v2 -var version_app=v2 -var replicas=5
+          # El apply vuelve antes de que los pods nuevos estén listos: esperar a los 5.
+          $MOTOR exec contador-k3s kubectl -n "$NS" rollout status deployment/contador --timeout=2m
           scripts/probar.sh "$URL" 50 | tee -a "$GITHUB_STEP_SUMMARY"
           test "$(curl -fs "$URL/stats" | jq '.pods | length')" -ge 5
 

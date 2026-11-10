@@ -46,43 +46,45 @@ function parsear(buf, i) {
   }
 }
 
-let sock = null;
-let pendientes = [];
-let buffer = Buffer.alloc(0);
+// Una conexión cada vez; si se cae, la siguiente petición abre otra.
+// Cada conexión lleva su propia cola y buffer para que una vieja no pise a la nueva.
+let conexion = null;
 
 function conectar() {
-  sock = net.createConnection(REDIS_PORT, REDIS_HOST);
-  sock.setTimeout(3000, () => sock.destroy(new Error('timeout con Redis')));
-  sock.on('data', (datos) => {
-    buffer = Buffer.concat([buffer, datos]);
+  const c = { sock: net.createConnection(REDIS_PORT, REDIS_HOST), pendientes: [], buffer: Buffer.alloc(0) };
+  // Timeout sólo para conectar; una vez conectada, la conexión puede estar inactiva.
+  c.sock.setTimeout(3000, () => c.sock.destroy(new Error('timeout conectando a Redis')));
+  c.sock.on('connect', () => c.sock.setTimeout(0));
+  c.sock.on('data', (datos) => {
+    c.buffer = Buffer.concat([c.buffer, datos]);
     let r;
-    while (pendientes.length && (r = parsear(buffer, 0))) {
-      buffer = buffer.subarray(r.fin);
-      const { resolve, reject } = pendientes.shift();
+    while (c.pendientes.length && (r = parsear(c.buffer, 0))) {
+      c.buffer = c.buffer.subarray(r.fin);
+      const { resolve, reject } = c.pendientes.shift();
       r.valor instanceof Error ? reject(r.valor) : resolve(r.valor);
     }
   });
   const cerrar = (err) => {
-    for (const p of pendientes) p.reject(err || new Error('conexión con Redis cerrada'));
-    pendientes = [];
-    buffer = Buffer.alloc(0);
-    sock = null;
+    if (conexion === c) conexion = null;
+    for (const p of c.pendientes) p.reject(err || new Error('conexión con Redis cerrada'));
+    c.pendientes = [];
   };
-  sock.on('error', cerrar);
-  sock.on('close', () => cerrar());
-  if (REDIS_PASSWORD) enviar(['AUTH', REDIS_PASSWORD]).catch(() => {});
+  c.sock.on('error', cerrar);
+  c.sock.on('close', () => cerrar());
+  conexion = c;
+  if (REDIS_PASSWORD) enviar(c, ['AUTH', REDIS_PASSWORD]).catch(() => {});
+  return c;
 }
 
-function enviar(args) {
+function enviar(c, args) {
   return new Promise((resolve, reject) => {
-    pendientes.push({ resolve, reject });
-    sock.write(`*${args.length}\r\n` + args.map((a) => `$${Buffer.byteLength(String(a))}\r\n${a}\r\n`).join(''));
+    c.pendientes.push({ resolve, reject });
+    c.sock.write(`*${args.length}\r\n` + args.map((a) => `$${Buffer.byteLength(String(a))}\r\n${a}\r\n`).join(''));
   });
 }
 
 function redis(...args) {
-  if (!sock) conectar();
-  return enviar(args);
+  return enviar(conexion || conectar(), args);
 }
 
 // ---------- HTTP ----------
@@ -143,7 +145,7 @@ servidor.listen(PORT, () => console.log(`contador ${VERSION} (${ENTORNO}) escuch
 process.on('SIGTERM', () => {
   console.log('SIGTERM: cerrando…');
   servidor.close(() => {
-    if (sock) sock.end();
+    if (conexion) conexion.sock.end();
     process.exit(0);
   });
   setTimeout(() => process.exit(0), 5000).unref();

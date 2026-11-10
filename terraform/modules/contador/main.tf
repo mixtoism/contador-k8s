@@ -58,8 +58,9 @@ resource "kubernetes_deployment_v1" "redis" {
             name = "REDIS_PASSWORD"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret_v1.redis.metadata[0].name
-                key  = "password"
+                name     = kubernetes_secret_v1.redis.metadata[0].name
+                key      = "password"
+                optional = false
               }
             }
           }
@@ -157,8 +158,9 @@ resource "kubernetes_deployment_v1" "app" {
             name = "REDIS_PASSWORD"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret_v1.redis.metadata[0].name
-                key  = "password"
+                name     = kubernetes_secret_v1.redis.metadata[0].name
+                key      = "password"
+                optional = false
               }
             }
           }
